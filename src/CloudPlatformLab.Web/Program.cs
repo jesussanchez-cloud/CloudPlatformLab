@@ -1,4 +1,6 @@
+using CloudPlatformLab.Application.Services;
 var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddScoped<ProductService>();
 
 // Add services to the container.
 builder.Services.AddControllersWithViews();
