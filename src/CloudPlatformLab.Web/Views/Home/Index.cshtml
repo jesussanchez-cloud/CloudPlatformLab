@@ -1,0 +1,73 @@
+﻿@model List<CloudPlatformLab.Application.Models.Product>
+
+@{
+    ViewData["Title"] = "CloudPlatformLab";
+}
+
+<div class="container py-5">
+
+    <div class="text-center mb-5">
+        <h1 class="display-4 fw-bold">CloudPlatformLab</h1>
+
+        <p class="lead">
+            Enterprise Azure cloud platform built with .NET 8,
+            Infrastructure as Code, DevOps and modern data services.
+        </p>
+
+        <a asp-controller="Home"
+           asp-action="Architecture"
+           class="btn btn-primary btn-lg">
+            Explore the Architecture
+        </a>
+    </div>
+
+    <hr class="my-5" />
+
+    <div class="text-center mb-4">
+        <h2>Platform Demonstration</h2>
+
+        <p>
+            This application demonstrates how a modern cloud platform
+            can integrate application, data, security and DevOps services.
+        </p>
+    </div>
+
+    <div class="row g-4">
+
+        @foreach (var product in Model)
+        {
+            <div class="col-md-4">
+
+                <div class="card h-100 shadow-sm">
+
+                    <div class="card-body">
+
+                        <h3 class="card-title">
+                            @product.Name
+                        </h3>
+
+                        <p class="card-text">
+                            Product ID: @product.ID
+                        </p>
+
+                        <p class="card-text">
+                            £@product.Price
+                        </p>
+
+                        <a asp-controller="Home"
+                           asp-action="Details"
+                           asp-route-id="@product.ID"
+                           class="btn btn-outline-primary">
+                            View Details
+                        </a>
+
+                    </div>
+
+                </div>
+
+            </div>
+        }
+
+    </div>
+
+</div>

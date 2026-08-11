@@ -1,0 +1,11 @@
+﻿@model CloudPlatformLab.Application.Models.Product
+
+@{
+    ViewData["Title"] = "Details";
+}
+<h1>Product Details</h1>
+<h2>@Model.Name</h2>
+<p>ID: @Model.ID</p>
+<p>Price: $@Model.Price</p>
+
+<a asp-controller="Home" asp-action="Index">Back to products</a>
