@@ -28,3 +28,15 @@ steps:
     command: 'build'
     projects: '**/*.sln'
     arguments: '--configuration Release --no-restore'
+
+- task: AzureCLI@2
+  displayName: 'Bicep What-If'
+  inputs:
+    azureSubscription: 'sc-cloudplatformlab-dev'
+    scriptType: 'bash'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      az deployment group what-if \
+        --resource-group rg-cloudplatformlab-dev \
+        --template-file infra/appservice/main.bicep
+        
