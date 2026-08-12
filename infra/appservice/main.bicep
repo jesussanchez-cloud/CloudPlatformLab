@@ -12,6 +12,14 @@ param location string = resourceGroup().location
 @description('Deployment slot used for development and validation.')
 param slotName string = 'dev'
 
+var tags = {
+  Project: 'CloudPlatformLab'
+  Environment: 'Dev'
+  ManagedBy: 'Bicep'
+  Owner: 'Jesus Sanchez'
+  CostCenter: 'CloudPlatformLab'
+}
+
 resource appServicePlan 'Microsoft.Web/serverfarms@2025-03-01' = {
   name: appServicePlanName
   location: location
@@ -23,6 +31,7 @@ resource appServicePlan 'Microsoft.Web/serverfarms@2025-03-01' = {
   properties: {
     reserved: false
   }
+  tags: tags
 }
 
 resource webApp 'Microsoft.Web/sites@2025-03-01' = {
@@ -42,6 +51,7 @@ resource webApp 'Microsoft.Web/sites@2025-03-01' = {
       ftpsState: 'Disabled'
     }
   }
+  tags: tags
 }
 
 resource devSlot 'Microsoft.Web/sites/slots@2025-03-01' = {
@@ -61,6 +71,7 @@ resource devSlot 'Microsoft.Web/sites/slots@2025-03-01' = {
       ftpsState: 'Disabled'
     }
   }
+  tags: tags
 }
 
 output appServiceName string = webApp.name
