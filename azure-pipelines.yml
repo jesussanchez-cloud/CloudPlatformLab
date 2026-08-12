@@ -1,42 +1,73 @@
-# Starter pipeline
-# Start with a minimal pipeline that you can customize to build and deploy your code.
-# Add steps that build, run tests, deploy, and more:
-# https://aka.ms/yaml
-
 trigger:
 - Dev
 
 pool:
   vmImage: ubuntu-latest
 
-steps:
-- task: UseDotNet@2
-  displayName: 'Install .NET 8 SDK'
-  inputs:
-    packageType: 'sdk'
-    version: '8.x'
+stages:
 
-- task: DotNetCoreCLI@2
-  displayName: 'Restore'
-  inputs:
-    command: 'restore'
-    projects: '**/*.sln'
+- stage: Validate
+  displayName: 'Build and Validate'
+  jobs:
+  - job: Validate
+    displayName: 'Build and Bicep What-If'
+    steps:
 
-- task: DotNetCoreCLI@2
-  displayName: 'Build'
-  inputs:
-    command: 'build'
-    projects: '**/*.sln'
-    arguments: '--configuration Release --no-restore'
+    - task: UseDotNet@2
+      displayName: 'Install .NET 8 SDK'
+      inputs:
+        packageType: 'sdk'
+        version: '8.x'
 
-- task: AzureCLI@2
-  displayName: 'Bicep What-If'
-  inputs:
-    azureSubscription: 'sc-cloudplatformlab-dev'
-    scriptType: 'bash'
-    scriptLocation: 'inlineScript'
-    inlineScript: |
-      az deployment group what-if \
-        --resource-group rg-cloudplatformlab-dev \
-        --template-file infra/appservice/main.bicep
-        
+    - task: DotNetCoreCLI@2
+      displayName: 'Restore'
+      inputs:
+        command: 'restore'
+        projects: '**/*.sln'
+
+    - task: DotNetCoreCLI@2
+      displayName: 'Build'
+      inputs:
+        command: 'build'
+        projects: '**/*.sln'
+        arguments: '--configuration Release --no-restore'
+
+    - task: AzureCLI@2
+      displayName: 'Bicep What-If'
+      inputs:
+        azureSubscription: 'sc-cloudplatformlab-dev'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          az deployment group what-if \
+            --resource-group rg-cloudplatformlab-dev \
+            --template-file infra/appservice/main.bicep
+
+- stage: DeployDev
+  displayName: 'Deploy Dev Infrastructure'
+  dependsOn: Validate
+  condition: succeeded()
+
+  jobs:
+  - deployment: DeployDevInfrastructure
+    displayName: 'Deploy Bicep to Dev'
+    environment: 'env-cloudplatformlab-dev'
+
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+
+          - checkout: self
+
+          - task: AzureCLI@2
+            displayName: 'Deploy Bicep'
+            inputs:
+              azureSubscription: 'sc-cloudplatformlab-dev'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                az deployment group create \
+                  --resource-group rg-cloudplatformlab-dev \
+                  --template-file infra/appservice/main.bicep \
+                  --name cloudplatformlab-dev
