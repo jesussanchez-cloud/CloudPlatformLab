@@ -1,24 +1,25 @@
 # CloudPlatformLab
 
-CloudPlatformLab is a personal Azure project I am building to develop and demonstrate my cloud and platform engineering skills.
+CloudPlatformLab is a production-oriented Azure platform engineering project demonstrating infrastructure as code, CI/CD, identity, security, networking, governance, observability and cost-aware cloud operations.
 
-The application itself is intentionally simple. The main focus is the platform around it: infrastructure as code, CI/CD, identity, security, networking, governance, monitoring and cost management.
+The application workload is intentionally simple. The engineering focus is the platform around it: reproducible infrastructure, secretless authentication, controlled deployments, environment validation and operational safeguards.
 
-I am building the project incrementally rather than deploying a large number of Azure services at once. This keeps the project manageable and gives me a chance to understand and document each part properly.
+The platform is being developed incrementally, with implemented capabilities separated from the target architecture so that architectural decisions, deployment controls and operational behaviour can be validated and documented as the platform evolves.
 
 ---
 
 ## Architecture
 
-The current application runs on Azure App Service.
-
-Infrastructure is defined in Bicep and changes are validated and deployed through Azure DevOps.
+The application platform is designed around Azure App Service, with infrastructure defined in Bicep and validated through Azure DevOps.
 
 ```text
                     Azure DevOps
                          |
                          v
                  Build and Validate
+                         |
+                         v
+              Pre-deployment Checks
                          |
                          v
                    Bicep What-If
@@ -42,7 +43,9 @@ Infrastructure is defined in Bicep and changes are validated and deployed throug
 
 The main App Service represents the production application.
 
-Development changes are deployed to the `dev` slot first so they can be validated before being promoted to production.
+Development changes are designed to be deployed to the `dev` slot first so they can be validated before being promoted to production.
+
+> **Deployment status:** The App Service infrastructure is defined in Bicep and has been successfully validated through Bicep What-If. Final S1 provisioning is currently blocked by a subscription-level App Service quota constraint. See [Deployment Validation and Evidence](#deployment-validation-and-evidence).
 
 ---
 
@@ -50,7 +53,7 @@ Development changes are deployed to the `dev` slot first so they can be validate
 
 The project is being built towards a broader Azure platform architecture.
 
-Not everything below is implemented yet. Components are being added where they demonstrate a useful cloud/platform engineering pattern rather than simply increasing the number of Azure services in the project.
+Not everything below is implemented yet. Components are added where they demonstrate a useful cloud/platform engineering pattern rather than simply increasing the number of Azure services in the project.
 
 ### Identity & Security
 
@@ -83,8 +86,8 @@ Not everything below is implemented yet. Components are being added where they d
 
 ### Messaging
 
-- Azure Service Bus
-- Azure Event Grid
+- Azure Service Bus for asynchronous messaging
+- Azure Event Grid for event distribution
 
 ### Observability
 
@@ -120,20 +123,22 @@ Not everything below is implemented yet. Components are being added where they d
 
 ## Current Implementation
 
-The following sections describe what has actually been implemented so far.
+The following sections describe capabilities that have actually been implemented or validated so far.
 
 ### Application
 
 The current workload is an ASP.NET Core .NET 8 application containing a simple Products API.
 
-The application is deliberately small because the focus of the project is the Azure platform and deployment architecture rather than application complexity.
+The application is deliberately small because the engineering focus is the Azure platform and deployment architecture rather than application complexity.
 
-Current application platform:
+Currently implemented:
 
-- ASP.NET Core .NET 8
+- ASP.NET Core .NET 8 application
 - Products API
-- Azure App Service architecture
-- `dev` deployment slot
+- App Service infrastructure defined in Bicep
+- `dev` deployment slot defined in Bicep
+- system-assigned managed identity defined in Bicep
+- App Service infrastructure validated through Bicep What-If
 
 ---
 
@@ -141,7 +146,7 @@ Current application platform:
 
 Azure infrastructure is defined using Bicep.
 
-The current Bicep template defines:
+The current App Service Bicep template defines:
 
 - S1 App Service Plan
 - App Service
@@ -157,13 +162,15 @@ The development infrastructure targets a dedicated resource group in UK South:
 rg-cloudplatformlab-dev
 ```
 
-Bicep is kept in the repository alongside the application so infrastructure changes can follow the same Git and pull request workflow as application changes.
+Bicep is kept in the repository alongside the application so infrastructure changes follow the same Git and pull request workflow as application changes.
+
+Infrastructure is validated before deployment rather than relying on manually configured Azure resources.
 
 ---
 
 ## CI/CD
 
-Azure DevOps is currently used for CI/CD.
+Azure DevOps is used for CI/CD.
 
 Changes are developed using feature branches and merged into `Dev` through pull requests.
 
@@ -179,10 +186,13 @@ Pull Request
 Dev
       |
       v
-Restore
+Restore & Build
       |
       v
-Build
+IaC Validation
+      |
+      v
+Pre-deployment Checks
       |
       v
 Bicep What-If
@@ -199,7 +209,11 @@ Infrastructure Deployment
 
 Bicep What-If runs before the deployment stage so proposed infrastructure changes can be reviewed before anything is changed in Azure.
 
-Infrastructure deployment uses an Azure DevOps Environment with an approval check. This gives me a manual control point between validating an infrastructure change and applying it.
+Infrastructure deployment uses an Azure DevOps Environment with an approval check, providing a control point between validating an infrastructure change and applying it.
+
+Pre-deployment checks are used to detect Azure subscription prerequisites before reaching the deployment stage.
+
+---
 
 ## Deployment Validation and Evidence
 
@@ -225,11 +239,13 @@ The template also defines HTTPS-only access, TLS 1.2, resource tagging and syste
 
 ### Current deployment constraint
 
-The final S1 provisioning is currently blocked by an Azure subscription-level App Service quota of `0`.
+Final S1 provisioning is currently blocked by an Azure subscription-level App Service quota of `0`.
 
-Rather than bypassing the deployment controls or manually creating resources, the pipeline now detects this condition during pre-deployment validation and stops before infrastructure deployment.
+Rather than bypassing the deployment controls or manually creating resources, the pipeline detects this condition during pre-deployment validation and stops before infrastructure deployment.
 
-This is an Azure subscription quota constraint rather than a Bicep validation failure. No S1 App Service resources are currently left running.
+This is an Azure subscription quota constraint rather than a Bicep validation failure. No S1 App Service resources were provisioned by the failed deployment.
+
+The failed deployment path was used to improve the pipeline so that subscription prerequisites are now detected earlier in the deployment lifecycle.
 
 ### Evidence
 
@@ -240,21 +256,23 @@ Pipeline and IaC evidence is available in [`docs/evidence`](docs/evidence/):
 - [Dev deployment slot defined through Bicep](docs/evidence/03-deployment-slot-iac-bicep.png)
 - [Manual Dev deployment gate](docs/evidence/04-manual-dev-deployment-gate.png)
 
+Additional architectural decisions and implementation details are documented in [`docs/architecture.md`](docs/architecture.md).
+
 ---
 
 ## Identity & Security
 
 The Azure DevOps pipeline connects to Azure using Workload Identity Federation.
 
-This means the pipeline can authenticate to Azure without storing a client secret in the repository or pipeline configuration.
+This allows the pipeline to authenticate to Azure without storing a long-lived client secret in the repository or pipeline configuration.
 
-The App Service is also configured with a system-assigned managed identity. This will be used as other Azure services are added so the application can authenticate without storing credentials where managed identity is supported.
+The App Service definition also includes a system-assigned managed identity. As dependent Azure services are introduced, managed identity will be preferred where supported instead of application credentials.
 
-Security controls currently implemented include:
+Security controls currently implemented or represented in the deployment architecture include:
 
 - Workload Identity Federation
 - system-assigned Managed Identity
-- HTTPS-only App Service
+- HTTPS-only App Service configuration
 - TLS 1.2 minimum
 - Azure RBAC
 - controlled Azure DevOps service connection
@@ -262,13 +280,13 @@ Security controls currently implemented include:
 
 Secrets and credentials are not stored in the repository.
 
-Key Vault, Azure Policy, private connectivity and additional security controls are part of the target architecture and will be introduced as the project develops.
+Key Vault, Azure Policy, private connectivity and additional security controls form part of the target architecture and will be introduced where they support a concrete platform requirement.
 
 ---
 
 ## Resource Organisation
 
-Development resources are grouped under:
+Development resources target:
 
 ```text
 rg-cloudplatformlab-dev
@@ -285,34 +303,35 @@ ManagedBy     = Bicep
 CostCenter    = CloudPlatformLab
 ```
 
-The same tagging approach can later be extended through Azure Policy as the governance part of the project develops.
+The same tagging approach can later be enforced through Azure Policy as the governance layer develops.
 
 ---
 
 ## Cost Management
 
-Cost management is part of the design of the project.
+Cost management is treated as part of the platform design rather than as a separate administrative task.
 
-Because this is a personal lab environment, I do not want paid Azure resources running when they are not being used.
+Because this is a personal lab environment, paid Azure resources do not need to remain online when they are not being actively used.
 
-Before deploying paid infrastructure I:
+Before deploying paid infrastructure:
 
 1. Run Bicep What-If.
 2. Review the proposed resource changes.
 3. Check the expected Azure cost.
-4. Manually approve the deployment.
-5. Validate the deployed infrastructure.
-6. Remove paid resources when they are no longer required.
+4. Validate subscription prerequisites.
+5. Manually approve the deployment.
+6. Validate the deployed infrastructure.
+7. Remove paid resources when they are no longer required.
 
 Because the environment is defined as code, resources can be destroyed when they are not needed and recreated later from Bicep.
 
-This also gives me a way to test that the infrastructure is reproducible rather than relying on resources that were configured manually.
+This also tests infrastructure reproducibility rather than relying on resources that were configured manually and left running indefinitely.
 
 ---
 
 ## Git Workflow
 
-Azure Repos is currently used for the main development and pull request workflow.
+Azure Repos is used for the main development and pull request workflow.
 
 GitHub is maintained as the public repository for the project.
 
@@ -331,9 +350,9 @@ Dev
 Build and Infrastructure Validation
 ```
 
-Infrastructure and pipeline changes also go through feature branches and pull requests rather than being changed directly on `Dev`.
+Infrastructure, pipeline and documentation changes go through feature branches and pull requests rather than being changed directly on `Dev`.
 
-After changes are merged, the GitHub repository is kept synchronized with the Azure Repos version.
+After changes are merged, the public GitHub repository is synchronized with the Azure Repos version.
 
 ---
 
@@ -348,11 +367,16 @@ CloudPlatformLab
 |
 +-- infra
 |   +-- appservice
+|   |   +-- main.bicep
+|   |
+|   +-- networking
 |       +-- main.bicep
 |
 +-- tests
 |
 +-- docs
+|   +-- architecture.md
+|   +-- evidence
 |
 +-- azure-pipelines.yml
 |
@@ -361,13 +385,13 @@ CloudPlatformLab
 +-- README.md
 ```
 
-The `tests` area is currently being prepared. Automated tests will be added as the deployment workflow develops.
+The `tests` area is currently being prepared. Genuine automated tests will be added as the deployment workflow develops.
 
 ---
 
 ## Deployment Strategy
 
-The current design uses one App Service with a development deployment slot.
+The application deployment architecture uses one App Service with a development deployment slot.
 
 ```text
 Dev branch
@@ -385,17 +409,17 @@ Validation
 Production
 ```
 
-The intention is to validate changes in the `dev` slot before promoting them to the main production App Service.
+The intended promotion path validates changes in the `dev` slot before promoting them to the main production App Service.
 
-Deployment slot swapping and rollback will be added once the basic application deployment pipeline is complete.
+Deployment slot swapping and rollback can then provide controlled promotion and recovery once the application deployment path is operational.
 
 ---
 
 ## Landing Zone and Governance
 
-A later part of the project will look at the platform above the individual workload.
+A later phase will extend the project from workload-level infrastructure into a small enterprise-style governance model.
 
-The aim is to build a small Azure landing zone example covering areas such as:
+The target model explores a structure such as:
 
 ```text
 Tenant Root
@@ -413,7 +437,7 @@ Tenant Root
                  +-- Prod
 ```
 
-This will be used to explore:
+This architecture will be used to explore:
 
 - Management Groups
 - subscription organisation
@@ -424,38 +448,39 @@ This will be used to explore:
 - networking
 - platform security
 
-I do not intend to create unnecessary paid resources or subscriptions simply to reproduce a large enterprise environment. Where appropriate, the project will implement a smaller working example and document how the design would scale in a production environment.
+The objective is not to create unnecessary paid resources or subscriptions simply to reproduce the size of an enterprise environment.
+
+Where appropriate, the project will implement a smaller working example and document how the same design would scale in a production environment.
 
 ---
 
 ## Bicep and Terraform
 
-Bicep is currently being used for the Azure workload infrastructure.
+Bicep is currently used for Azure workload infrastructure.
 
-Terraform will also be introduced later in the project.
+Terraform will be introduced later for selected infrastructure.
 
-The intention is not to maintain two identical copies of every resource. I want to use both tools where they provide useful examples and demonstrate the differences between Azure-native IaC and a provider-based IaC workflow.
+The intention is not to maintain two identical implementations of every resource. The project will use both tools where they demonstrate useful infrastructure patterns and the differences between Azure-native IaC and a provider-based IaC workflow.
 
 ---
 
 ## Current Work
 
-The current phase of the project is focused on completing the Dev deployment path.
+The current phase is extending the platform beyond the initial App Service deployment architecture.
 
-Next steps are:
+Current priorities are:
 
-- complete the first gated Bicep deployment
-- deploy the .NET application to the `dev` App Service slot
-- add deployment validation and health checks
-- add automated tests
-- add Application Insights and Azure Monitor
-- introduce Key Vault where secrets are required
-- improve Azure Policy and governance controls
-- add private networking where it provides a useful example
-- add Terraform
-- build the landing zone/governance example
+- integrate the networking Bicep module into CI validation
+- build the Dev virtual network and subnet foundation
+- separate generic IaC validation from workload-specific deployment readiness checks
+- add automated application tests
+- introduce observability with Application Insights and Azure Monitor
+- add Key Vault and managed-identity based access where required
+- introduce private connectivity as dependent platform services are added
+- extend governance with Azure Policy
+- introduce Terraform for selected infrastructure
 
-The architecture will continue to change as these parts are implemented.
+The architecture and documentation will continue to evolve alongside implemented capabilities.
 
 ---
 
@@ -464,7 +489,6 @@ The architecture will continue to change as these parts are implemented.
 ### Currently Used
 
 - Microsoft Azure
-- Azure App Service
 - Microsoft Entra ID
 - Azure DevOps
 - Azure Repos
@@ -473,13 +497,21 @@ The architecture will continue to change as these parts are implemented.
 - Workload Identity Federation
 - Managed Identity
 - Bicep
+- Bicep What-If
 - Azure CLI
 - ASP.NET Core
 - .NET 8
 - Git
 - GitHub
 
-### Planned / In Progress
+### Defined / In Progress
+
+- Azure App Service
+- App Service Deployment Slots
+- Azure Virtual Network
+- Subnet architecture
+
+### Planned
 
 - Terraform
 - Azure Key Vault
