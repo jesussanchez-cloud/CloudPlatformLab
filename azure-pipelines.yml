@@ -59,8 +59,8 @@ stages:
         scriptLocation: 'inlineScript'
         nlineScript: |
           az deployment group what-if \
-          --resource-group rg-cloudplatformlab-dev \
-          --template-file infra/appservice/main.bicep
+            --resource-group rg-cloudplatformlab-dev \
+            --template-file infra/appservice/main.bicep
 
 - stage: DeployDev
   displayName: 'Deploy Dev Infrastructure'
