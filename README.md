@@ -201,6 +201,45 @@ Bicep What-If runs before the deployment stage so proposed infrastructure change
 
 Infrastructure deployment uses an Azure DevOps Environment with an approval check. This gives me a manual control point between validating an infrastructure change and applying it.
 
+## Deployment Validation and Evidence
+
+The infrastructure deployment workflow is implemented through Azure DevOps and Bicep.
+
+The pipeline currently performs:
+
+- .NET 8 restore and build
+- Azure subscription pre-deployment checks
+- `Microsoft.Web` resource provider validation
+- App Service S1 quota validation
+- Bicep What-If before deployment
+- Azure DevOps Environment approval before Dev infrastructure deployment
+- Azure authentication through Workload Identity Federation
+
+The Bicep What-If has successfully validated the intended creation of:
+
+- Standard S1 App Service Plan
+- Products API App Service
+- `dev` deployment slot
+
+The template also defines HTTPS-only access, TLS 1.2, resource tagging and system-assigned managed identity.
+
+### Current deployment constraint
+
+The final S1 provisioning is currently blocked by an Azure subscription-level App Service quota of `0`.
+
+Rather than bypassing the deployment controls or manually creating resources, the pipeline now detects this condition during pre-deployment validation and stops before infrastructure deployment.
+
+This is an Azure subscription quota constraint rather than a Bicep validation failure. No S1 App Service resources are currently left running.
+
+### Evidence
+
+Pipeline and IaC evidence is available in [`docs/evidence`](docs/evidence/):
+
+- [Pre-deployment quota gate](docs/evidence/01-pre-deployment-validation-quota-gate.png)
+- [Bicep Infrastructure as Code What-If](docs/evidence/02-infrastructure-as-code-bicep-what-if.png)
+- [Dev deployment slot defined through Bicep](docs/evidence/03-deployment-slot-iac-bicep.png)
+- [Manual Dev deployment gate](docs/evidence/04-manual-dev-deployment-gate.png)
+
 ---
 
 ## Identity & Security
