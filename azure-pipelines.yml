@@ -39,7 +39,7 @@ stages:
         scriptType: 'bash'
         scriptLocation: 'inlineScript'
         inlineScript: |
-          set-euo pipefail
+          set -euo pipefail
 
           echo "Checking Microsoft.Web registration..."
 
@@ -52,6 +52,35 @@ stages:
 
           if [ "$state" != "Registered" ]; then
             echo "##vso[task.logissue type=error]Microsoft.Web is not registered."
+            exit 1
+          fi
+
+          echo "Checking S1 App Service quota in UK South..."
+
+          subscriptionId=$(az account show \
+            --query id \
+            --output tsv)
+
+          quotaJson=$(az rest \
+            --method get \
+            --url "https://management.azure.com/subscriptions/${subscriptionId}/providers/Microsoft.Web/locations/uksouth/usages?api-version=2025-03-01")
+
+          s1Limit=$(echo "$quotaJson" | jq -r \
+            '.value[] | select(.name.value == "S1") | .limit')
+
+          s1Usage=$(echo "$quotaJson" | jq -r \
+            '.value[] | select(.name.value == "S1") | .currentValue')
+
+          echo "S1 quota limit: $s1Limit"
+          echo "S1 current usage: $s1Usage"
+
+          if [ -z "$s1Limit" ]; then
+            echo "##vso[task.logissue type=error]Unable to determine S1 App Service quota."
+            exit 1
+          fi
+
+          if [ "$s1Limit" -lt 1 ]; then
+            echo "##vso[task.logissue type=error]S1 App Service quota in UK South is 0. Deployment cannot continue."
             exit 1
           fi
 
