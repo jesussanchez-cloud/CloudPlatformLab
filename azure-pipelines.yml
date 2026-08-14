@@ -32,16 +32,35 @@ stages:
         projects: '**/*.sln'
         arguments: '--configuration Release --no-restore'
 
-    - task: AzureCLI@2
-      displayName: 'Bicep What-If'
-      inputs:
-        azureSubscription: 'sc-cloudplatformlab-dev'
-        scriptType: 'bash'
-        scriptLocation: 'inlineScript'
-        inlineScript: |
-          az deployment group what-if \
-            --resource-group rg-cloudplatformlab-dev \
-            --template-file infra/appservice/main.bicep
+- task: AzureCLI@2
+  displayName: 'Pre-deployment checks'
+  inputs:
+    azureSubscription: 'sc-cloudplatformlab-dev'
+    scriptType: 'bash'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      state=$(az provider show \
+        --namespace Microsoft.Web \
+        --query registrationState \
+        --output tsv)
+
+      echo "Microsoft.Web registration state: $state"
+
+      if [ "$state" != "Registered" ]; then
+        echo "##vso[task.logissue type=error]Microsoft.Web is not registered."
+        exit 1
+      fi
+
+- task: AzureCLI@2
+  displayName: 'Bicep What-If'
+  inputs:
+    azureSubscription: 'sc-cloudplatformlab-dev'
+    scriptType: 'bash'
+    scriptLocation: 'inlineScript'
+    nlineScript: |
+      az deployment group what-if \
+       --resource-group rg-cloudplatformlab-dev \
+       --template-file infra/appservice/main.bicep
 
 - stage: DeployDev
   displayName: 'Deploy Dev Infrastructure'
