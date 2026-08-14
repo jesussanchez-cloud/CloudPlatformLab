@@ -144,6 +144,24 @@ This environment has a manual approval check.
 
 ---
 
+### Deployment safeguards
+
+Infrastructure changes are not deployed directly from a developer workstation.
+
+The Azure DevOps deployment path uses:
+
+1. Application restore and build
+2. Azure subscription pre-deployment validation
+3. Bicep What-If
+4. Azure DevOps Environment approval
+5. Bicep resource-group deployment
+
+Pre-deployment validation checks that the required `Microsoft.Web` resource provider is registered and that the subscription has sufficient S1 App Service quota.
+
+The deployment stage uses an Azure Resource Manager service connection configured with Workload Identity Federation, avoiding a long-lived client secret in the pipeline.
+
+---
+
 ## Identity and Authentication
 
 The Azure DevOps pipeline authenticates to Azure using Workload Identity Federation.
@@ -402,25 +420,36 @@ Paid resources are deployed only when they are needed and can be removed afterwa
 
 ## Current Status
 
-Implemented:
+Implemented and validated:
 
 - .NET 8 application
 - Products API
 - Azure DevOps CI pipeline
-- Bicep infrastructure
-- Bicep What-If
+- Bicep infrastructure definitions
+- Bicep What-If validation
 - Workload Identity Federation
 - Azure DevOps Environment
 - manual deployment approval
-- App Service architecture
+- pre-deployment provider validation
+- pre-deployment App Service quota validation
+- system-assigned managed identity defined in Bicep
+- resource tagging defined in Bicep
+
+Infrastructure defined but not currently provisioned:
+
+- S1 App Service Plan
+- Products API App Service
 - `dev` deployment slot
-- managed identity
-- resource tagging
+
+The App Service infrastructure has been validated through Bicep What-If,
+but provisioning is currently blocked by the Azure subscription's S1
+App Service quota limit of `0`. No App Service resources are currently
+running.
 
 In progress:
 
-- first gated infrastructure deployment
-- application deployment to the `dev` slot
+- application deployment to the `dev` slot once suitable App Service
+  capacity is available
 - deployment validation
 - health checks
 
@@ -433,3 +462,16 @@ Planned:
 - private networking
 - Terraform
 - landing zone/governance example
+
+---
+
+## Implementation Evidence
+
+Selected implementation evidence is stored in [`docs/evidence`](evidence/).
+
+| Evidence | Demonstrates |
+|---|---|
+| [Pre-deployment quota gate](evidence/01-pre-deployment-validation-quota-gate.png) | Subscription readiness validation and fail-fast deployment control |
+| [Bicep What-If](evidence/02-infrastructure-as-code-bicep-what-if.png) | Infrastructure as Code evaluated against Azure before deployment |
+| [Dev deployment slot](evidence/03-deployment-slot-iac-bicep.png) | Deployment slot, managed identity, HTTPS/TLS and tagging represented through Bicep |
+| [Manual Dev deployment gate](evidence/04-manual-dev-deployment-gate.png) | Controlled promotion into the Dev environment |
