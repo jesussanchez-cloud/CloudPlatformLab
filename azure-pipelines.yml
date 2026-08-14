@@ -57,7 +57,7 @@ stages:
         azureSubscription: 'sc-cloudplatformlab-dev'
         scriptType: 'bash'
         scriptLocation: 'inlineScript'
-        nlineScript: |
+        inlineScript: |
           az deployment group what-if \
             --resource-group rg-cloudplatformlab-dev \
             --template-file infra/appservice/main.bicep
