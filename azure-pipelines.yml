@@ -39,6 +39,8 @@ stages:
         scriptType: 'bash'
         scriptLocation: 'inlineScript'
         inlineScript: |
+          echo "Checking Microsoft.Web registration..."
+
           state=$(az provider show \
             --namespace Microsoft.Web \
             --query registrationState \
@@ -50,6 +52,29 @@ stages:
             echo "##vso[task.logissue type=error]Microsoft.Web is not registered."
             exit 1
           fi
+
+          echo "Checking App Service quota in UK South..."
+
+          ubscriptionId=$(az account show --query id --output tsv)
+
+          quota=$(az rest \
+            --method get \
+            --url "https://management.azure.com/subscriptions/$subscriptionId/providers/Microsoft.Web/locations/uksouth/usages?api-version=2026-07-15")
+
+          echo "$quota"
+
+          limit=$(echo "$quota" | jq '[.value[].limit] | max')
+          current=$(echo "$quota" | jq '[.value[].currentValue] | max')
+
+          echo "App Service quota limit: $limit"
+          echo "Current usage: $current"
+
+          if [ "$limit" -lt 1 ]; then
+            echo "##vso[task.logissue type=error]App Service quota in UK South is not sufficient."
+            exit 1
+          fi
+
+          echo "Pre-deployment checks passed."
 
     - task: AzureCLI@2
       displayName: 'Bicep What-If'
