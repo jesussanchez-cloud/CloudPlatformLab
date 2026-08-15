@@ -4,44 +4,59 @@ CloudPlatformLab is designed as a small Azure platform engineering project rathe
 
 The application is intentionally simple. The main focus is the Azure architecture around it: infrastructure as code, CI/CD, identity, security, governance, networking, observability and cost control.
 
-The project is being built incrementally so that each part can be understood and tested properly.
+The project is being built incrementally so that each part can be understood, tested and documented properly.
 
 ---
 
 ## Current Architecture
 
-The current workload uses Azure App Service with a development deployment slot.
+CloudPlatformLab currently has a deployed Dev networking foundation, with the application platform defined separately in Bicep.
 
 ```text
-                    Azure DevOps
-                         |
-                         v
-                 Build and Validate
-                         |
-                         v
-                   Bicep What-If
-                         |
-                         v
-                  Manual Approval
-                         |
-                         v
-                  Bicep Deployment
-                         |
-                         v
-                rg-cloudplatformlab-dev
-                         |
-                         v
-                  App Service Plan
-                         |
-                         v
-                    App Service
-                         |
-                         +---- dev slot
+                         Azure DevOps
+                              |
+                              v
+                       Build Application
+                              |
+                +-------------+-------------+
+                |                           |
+                v                           v
+        App Service Path             Networking Path
+                |                           |
+                v                           v
+        Readiness Checks             Readiness Checks
+                |                           |
+                v                           v
+        Bicep Validation             Bicep Validation
+                |                           |
+                v                           v
+          Bicep What-If                Bicep What-If
+                |                           |
+                v                           v
+         Manual Approval              Manual Approval
+                |                           |
+                v                           v
+        App Service Deploy           Networking Deploy
+         (quota blocked)                    |
+                                            v
+                                  rg-cloudplatformlab-dev
+                                            |
+                                            v
+                                  vnet-cloudplatformlab-dev
+                                     10.10.0.0/16
+                                            |
+                              +-------------+-------------+
+                              |                           |
+                              v                           v
+                           snet-app             snet-private-endpoints
+                         10.10.1.0/24               10.10.2.0/24
 ```
 
-The main App Service represents the production application.
+The networking deployment path has been successfully executed through Azure DevOps, including readiness validation, Bicep validation, Bicep What-If, manual environment approval and Bicep deployment.
 
-The `dev` slot is used for development and validation before changes are promoted to production.
+The App Service infrastructure follows an independent deployment path. Its Bicep definition is valid, but provisioning is currently blocked by the subscription's available App Service quota.
+
+Keeping these deployment paths independent allows networking infrastructure to be validated and deployed without being blocked by an unrelated application-platform constraint.
 
 ---
 
@@ -55,24 +70,31 @@ Current application components:
 
 - ASP.NET Core .NET 8
 - Products API
-- Azure App Service
-- `dev` deployment slot
+- Azure App Service architecture
+- `dev` deployment slot architecture
+
+The App Service infrastructure is currently defined and validated through Bicep but is not provisioned because of the subscription's available App Service quota.
 
 ---
 
 ## Infrastructure Layer
 
-Infrastructure is defined using Bicep.
+Infrastructure is defined using Bicep and separated by platform concern.
 
-The current template is located at:
+Current templates are located at:
 
 ```text
-infra/appservice/main.bicep
+infra/
++-- appservice/
+|   +-- main.bicep
+|
++-- networking/
+    +-- main.bicep
 ```
 
-It currently defines:
+The App Service template defines:
 
-- S1 App Service Plan
+- configurable App Service Plan SKU
 - App Service
 - `dev` deployment slot
 - system-assigned managed identity
@@ -80,7 +102,27 @@ It currently defines:
 - TLS 1.2 minimum
 - resource tags
 
-The infrastructure is deployed into:
+The networking template defines:
+
+- Dev virtual network
+- application subnet
+- private endpoint subnet
+- common resource tags
+
+The deployed networking foundation currently consists of:
+
+```text
+vnet-cloudplatformlab-dev
+10.10.0.0/16
+|
++-- snet-app
+|   10.10.1.0/24
+|
++-- snet-private-endpoints
+    10.10.2.0/24
+```
+
+Infrastructure is deployed into:
 
 ```text
 rg-cloudplatformlab-dev
@@ -92,7 +134,34 @@ Region:
 UK South
 ```
 
+Separating infrastructure by platform concern allows each area to be validated, deployed and evolved independently while remaining managed through the same repository and CI/CD workflow.
+
 Using Bicep means the environment can be recreated instead of relying on manually configured resources.
+
+---
+
+## Networking Architecture
+
+The first deployed networking foundation provides address space for application workloads and future private connectivity.
+
+```text
+vnet-cloudplatformlab-dev
+Address space: 10.10.0.0/16
+|
++-- snet-app
+|   10.10.1.0/24
+|
++-- snet-private-endpoints
+    10.10.2.0/24
+```
+
+`snet-app` provides a dedicated subnet for application-related integration as the platform develops.
+
+`snet-private-endpoints` reserves separate address space for future Azure Private Endpoints, keeping private platform-service connectivity separated from application integration.
+
+The current network is intentionally small. Hub-spoke topology, Private DNS, VNet peering and additional network controls will be introduced when they support an implemented platform requirement rather than being added solely for architectural complexity.
+
+The networking infrastructure is independently deployable through the Azure DevOps pipeline and has been successfully provisioned from Bicep.
 
 ---
 
@@ -100,9 +169,9 @@ Using Bicep means the environment can be recreated instead of relying on manuall
 
 Azure DevOps is used for CI/CD.
 
-Changes are developed in feature branches and merged into `Dev` through pull requests.
+Changes are developed in feature branches and merged into `Dev` through pull requests. The `Dev` branch is the deployment source for the Dev environment.
 
-The current deployment flow is:
+The pipeline separates application-platform and networking infrastructure into independent deployment paths.
 
 ```text
 Feature branch
@@ -114,51 +183,68 @@ Pull Request
 Dev
       |
       v
-Restore
+Build Application
       |
-      v
-Build
-      |
-      v
-Bicep What-If
-      |
-      v
-Azure DevOps Environment
-      |
-      v
-Manual Approval
-      |
-      v
-Bicep Deployment
+      +---------------------------+
+      |                           |
+      v                           v
+App Service Path            Networking Path
+      |                           |
+      v                           v
+Readiness Checks            Readiness Checks
+      |                           |
+      v                           v
+Bicep Validation            Bicep Validation
+      |                           |
+      v                           v
+Bicep What-If               Bicep What-If
+      |                           |
+      v                           v
+Manual Approval             Manual Approval
+      |                           |
+      v                           v
+Deployment                  Deployment
 ```
 
-Bicep What-If runs before infrastructure deployment so that proposed Azure changes can be reviewed before they are applied.
+The independent paths prevent a deployment constraint affecting one infrastructure area from unnecessarily blocking another.
 
-The deployment stage targets the Azure DevOps environment:
+This is currently demonstrated by the App Service quota constraint: App Service deployment can stop at its readiness checks while networking continues independently through validation, approval and deployment.
+
+Both deployment paths target the Azure DevOps environment:
 
 ```text
 env-cloudplatformlab-dev
 ```
 
-This environment has a manual approval check.
+The environment uses a manual approval check before infrastructure changes are applied.
 
 ---
 
-### Deployment safeguards
+### Deployment Safeguards
 
 Infrastructure changes are not deployed directly from a developer workstation.
 
-The Azure DevOps deployment path uses:
+Each infrastructure path follows a controlled sequence:
 
-1. Application restore and build
-2. Azure subscription pre-deployment validation
+1. Deployment readiness checks
+2. Bicep validation
 3. Bicep What-If
 4. Azure DevOps Environment approval
 5. Bicep resource-group deployment
 
-Pre-deployment validation checks that the required `Microsoft.Web` resource provider is registered and that the subscription has sufficient S1 App Service quota.
+App Service readiness currently validates:
 
-The deployment stage uses an Azure Resource Manager service connection configured with Workload Identity Federation, avoiding a long-lived client secret in the pipeline.
+- `Microsoft.Web` resource provider registration
+- quota availability for the configured App Service SKU
+
+Networking readiness currently validates:
+
+- `Microsoft.Network` resource provider registration
+- target resource group availability
+
+These checks are intentionally separated from generic Bicep validation so environmental deployment constraints do not prevent the infrastructure definition itself from being validated.
+
+The deployment stages use an Azure Resource Manager service connection configured with Workload Identity Federation, avoiding a long-lived client secret in the pipeline.
 
 ---
 
@@ -174,7 +260,7 @@ The service connection is:
 sc-cloudplatformlab-dev
 ```
 
-The App Service also uses a system-assigned managed identity.
+The App Service is also defined with a system-assigned managed identity.
 
 The intention is to use managed identity for access to Azure services wherever possible instead of storing credentials in application configuration.
 
@@ -185,12 +271,15 @@ The intention is to use managed identity for access to Azure services wherever p
 Current security controls include:
 
 - Workload Identity Federation
-- system-assigned managed identity
-- HTTPS-only App Service
-- TLS 1.2 minimum
 - Azure RBAC
 - controlled Azure DevOps service connection
 - manual approval before infrastructure deployment
+- deployment readiness checks
+- infrastructure validation before deployment
+- system-assigned managed identity defined for App Service
+- HTTPS-only App Service configuration
+- TLS 1.2 minimum App Service configuration
+- separate subnet reserved for future Private Endpoints
 
 Planned security improvements include:
 
@@ -240,6 +329,12 @@ The current process is:
 Bicep change
      |
      v
+Readiness checks
+     |
+     v
+Bicep validation
+     |
+     v
 What-If
      |
      v
@@ -258,18 +353,20 @@ Deploy
 Validate and gather evidence
      |
      v
-Remove paid resources
+Remove paid resources when appropriate
 ```
 
 Because the environment is defined as code, resources can be removed and recreated later.
 
 This also helps test whether the infrastructure is genuinely reproducible.
 
+The networking foundation currently uses Azure resources that do not require the App Service capacity that is blocking the application-platform deployment. Separating the deployment paths allows useful platform work to continue without bypassing the App Service quota constraint.
+
 ---
 
 ## Target Architecture
 
-The current App Service workload is only the first part of the project.
+The currently deployed networking foundation and defined App Service workload are the first parts of a broader Azure platform architecture.
 
 The longer-term target architecture includes the following areas.
 
@@ -285,10 +382,12 @@ The longer-term target architecture includes the following areas.
 
 ### Networking
 
-- Hub-spoke virtual network
-- VNet Peering
+- hub-spoke virtual network architecture
+- VNet peering
 - Private DNS
+- Private Endpoints
 - private connectivity to Azure platform services
+- workload subnet segmentation
 
 ### Application Platform
 
@@ -372,7 +471,7 @@ This will be used to explore:
 - cost controls
 - platform security
 
-The goal is not to reproduce a huge enterprise environment at unnecessary cost.
+The goal is not to reproduce a large enterprise environment at unnecessary cost.
 
 Where appropriate, a smaller working implementation will be used together with documentation showing how the design would scale.
 
@@ -385,6 +484,8 @@ Where appropriate, a smaller working implementation will be used together with d
 App Service provides a managed application platform without requiring VM or Kubernetes management.
 
 It is suitable for demonstrating deployment slots, managed identity, application configuration and CI/CD without adding unnecessary infrastructure complexity.
+
+The App Service Plan SKU is parameterised so the architecture is not permanently tied to a specific SKU such as S1.
 
 ### Why a Deployment Slot
 
@@ -410,6 +511,28 @@ Infrastructure changes can affect both availability and cost.
 
 The approval gate creates a deliberate review point between validation and deployment.
 
+### Why Separate Infrastructure Deployment Paths
+
+App Service and networking have different deployment dependencies and readiness requirements.
+
+Keeping them in independent pipeline paths means a constraint affecting one platform area does not unnecessarily block validation or deployment of another.
+
+This is demonstrated by the current App Service quota restriction: the application-platform deployment can stop at its readiness check while networking can continue independently through validation, approval and deployment.
+
+### Why Separate Application and Private Endpoint Subnets
+
+Application integration and Private Endpoints serve different networking purposes.
+
+Using separate subnets provides a clearer boundary between application connectivity and private access to Azure platform services and gives each area room to evolve with its own configuration and controls.
+
+### Why Readiness Checks Before What-If
+
+Some Azure deployment failures are caused by subscription or environment conditions rather than invalid infrastructure code.
+
+Readiness checks detect known environmental constraints before running deployment evaluation, while Bicep validation independently verifies that the infrastructure definition can compile successfully.
+
+This also produces clearer pipeline failures by distinguishing an invalid infrastructure definition from an Azure subscription or deployment-readiness constraint.
+
 ### Why Cost-Aware Deployment
 
 The project is a lab environment rather than a permanent production workload.
@@ -424,42 +547,61 @@ Implemented and validated:
 
 - .NET 8 application
 - Products API
-- Azure DevOps CI pipeline
+- Azure DevOps CI/CD pipeline
+- independent App Service and networking pipeline paths
 - Bicep infrastructure definitions
-- Bicep What-If validation
+- Bicep validation
+- Bicep What-If
 - Workload Identity Federation
 - Azure DevOps Environment
 - manual deployment approval
-- pre-deployment provider validation
-- pre-deployment App Service quota validation
+- resource-provider readiness validation
+- App Service SKU quota validation
 - system-assigned managed identity defined in Bicep
 - resource tagging defined in Bicep
+- Dev virtual network deployed through Bicep
+- application subnet deployed through Bicep
+- private endpoint subnet deployed through Bicep
+
+Currently provisioned:
+
+```text
+vnet-cloudplatformlab-dev
+10.10.0.0/16
+
+snet-app
+10.10.1.0/24
+
+snet-private-endpoints
+10.10.2.0/24
+```
 
 Infrastructure defined but not currently provisioned:
 
-- S1 App Service Plan
+- App Service Plan
 - Products API App Service
 - `dev` deployment slot
 
-The App Service infrastructure has been validated through Bicep What-If,
-but provisioning is currently blocked by the Azure subscription's S1
-App Service quota limit of `0`. No App Service resources are currently
-running.
+The App Service infrastructure has been validated through Bicep, but provisioning is currently blocked by the Azure subscription's available App Service quota.
+
+The App Service SKU is parameterised so the deployment architecture is not tied permanently to S1 and can use an appropriate supported SKU in the future.
 
 In progress:
 
-- application deployment to the `dev` slot once suitable App Service
-  capacity is available
+- application deployment once suitable App Service capacity is available
 - deployment validation
 - health checks
 
 Planned:
 
 - automated tests
-- monitoring and logging
+- Azure Monitor and Application Insights
+- Log Analytics
 - Key Vault
 - Azure Policy
-- private networking
+- Private Endpoints
+- Private DNS
+- hub-spoke networking
 - Terraform
 - landing zone/governance example
 
@@ -475,3 +617,6 @@ Selected implementation evidence is stored in [`docs/evidence`](evidence/).
 | [Bicep What-If](evidence/02-infrastructure-as-code-bicep-what-if.png) | Infrastructure as Code evaluated against Azure before deployment |
 | [Dev deployment slot](evidence/03-deployment-slot-iac-bicep.png) | Deployment slot, managed identity, HTTPS/TLS and tagging represented through Bicep |
 | [Manual Dev deployment gate](evidence/04-manual-dev-deployment-gate.png) | Controlled promotion into the Dev environment |
+| [Networking deployment](evidence/05-networking-bicep-deployment-success.png) | Successful networking infrastructure deployment through the controlled Azure DevOps pipeline |
+| [Deployed Virtual Network](evidence/06-networking-vnet-deployed-azure.png) | Azure Virtual Network successfully provisioned from Bicep |
+| [Networking subnets](evidence/07-networking-subnets-deployed-azure.png) | Application and private endpoint subnet segmentation deployed in Azure |

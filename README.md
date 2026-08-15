@@ -168,6 +168,42 @@ Infrastructure is validated before deployment rather than relying on manually co
 
 ---
 
+## Networking
+
+The Dev environment now includes a networking foundation deployed through Bicep and the Azure DevOps pipeline.
+
+The current networking infrastructure consists of:
+
+- `vnet-cloudplatformlab-dev`
+- `snet-app` — `10.10.1.0/24`
+- `snet-private-endpoints` — `10.10.2.0/24`
+
+Networking changes follow the same controlled deployment process as the rest of the infrastructure:
+
+```text
+Networking Bicep
+      |
+      v
+Readiness Checks
+      |
+      v
+Bicep What-If
+      |
+      v
+Manual Approval
+      |
+      v
+Networking Deployment
+```
+
+The networking readiness stage verifies that the `Microsoft.Network` resource provider is registered and that the target resource group exists before the What-If and deployment stages are allowed to proceed.
+
+The separate application and private endpoint subnets provide the initial network segmentation for the platform. The `snet-private-endpoints` subnet is reserved for private connectivity as services requiring Private Endpoints are introduced later.
+
+Hub-spoke networking, VNet peering, Private DNS and Private Endpoints remain part of the target architecture and have not yet been implemented.
+
+---
+
 ## CI/CD
 
 Azure DevOps is used for CI/CD.
@@ -255,6 +291,9 @@ Pipeline and IaC evidence is available in [`docs/evidence`](docs/evidence/):
 - [Bicep Infrastructure as Code What-If](docs/evidence/02-infrastructure-as-code-bicep-what-if.png)
 - [Dev deployment slot defined through Bicep](docs/evidence/03-deployment-slot-iac-bicep.png)
 - [Manual Dev deployment gate](docs/evidence/04-manual-dev-deployment-gate.png)
+- [Networking Bicep deployment](docs/evidence/05-networking-bicep-deployment-success.png)
+- [Deployed Azure Virtual Network](docs/evidence/06-networking-vnet-deployed-azure.png)
+- [Deployed networking subnets](docs/evidence/07-networking-subnets-deployed-azure.png)
 
 Additional architectural decisions and implementation details are documented in [`docs/architecture.md`](docs/architecture.md).
 
@@ -466,19 +505,19 @@ The intention is not to maintain two identical implementations of every resource
 
 ## Current Work
 
-The current phase is extending the platform beyond the initial App Service deployment architecture.
+The networking foundation and independent infrastructure deployment paths are now implemented and validated through the Dev pipeline.
+
+The next phase will extend the platform with additional security, observability and private connectivity capabilities.
 
 Current priorities are:
 
-- integrate the networking Bicep module into CI validation
-- build the Dev virtual network and subnet foundation
-- separate generic IaC validation from workload-specific deployment readiness checks
 - add automated application tests
 - introduce observability with Application Insights and Azure Monitor
 - add Key Vault and managed-identity based access where required
-- introduce private connectivity as dependent platform services are added
+- introduce Private Endpoints and Private DNS as dependent platform services are added
 - extend governance with Azure Policy
 - introduce Terraform for selected infrastructure
+- develop the landing zone and governance model
 
 The architecture and documentation will continue to evolve alongside implemented capabilities.
 
@@ -503,13 +542,13 @@ The architecture and documentation will continue to evolve alongside implemented
 - .NET 8
 - Git
 - GitHub
+- Azure Virtual Network
+- Subnet architecture
 
 ### Defined / In Progress
 
 - Azure App Service
 - App Service Deployment Slots
-- Azure Virtual Network
-- Subnet architecture
 
 ### Planned
 
