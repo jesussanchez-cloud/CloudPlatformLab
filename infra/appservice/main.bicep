@@ -12,6 +12,9 @@ param location string = resourceGroup().location
 @description('Deployment slot used for development and validation.')
 param slotName string = 'dev'
 
+@description('App Service Plan SKU. Default is Standard S1.')
+param appServicePlanSku string = 'S1'
+
 var tags = {
   Project: 'CloudPlatformLab'
   Environment: 'Dev'
@@ -25,8 +28,7 @@ resource appServicePlan 'Microsoft.Web/serverfarms@2025-03-01' = {
   location: location
   kind: 'app'
   sku: {
-    name: 'S1'
-    tier: 'Standard'
+    name: appServicePlanSku
   }
   properties: {
     reserved: false
