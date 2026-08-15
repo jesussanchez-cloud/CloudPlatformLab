@@ -48,7 +48,7 @@ stages:
 
 
 # =========================================================
-# APP SERVICE - VALIDATE
+# APP SERVICE - VALIDATE BICEP
 # =========================================================
 
 - stage: ValidateAppService
@@ -59,7 +59,7 @@ stages:
   jobs:
 
   - job: ValidateAppService
-    displayName: 'Validate App Service Infrastructure'
+    displayName: 'Validate App Service Bicep'
 
     steps:
 
@@ -77,20 +77,6 @@ stages:
             --stdout > /dev/null
 
           echo "App Service Bicep validation passed."
-
-    - task: AzureCLI@2
-      displayName: 'App Service What-If'
-      inputs:
-        azureSubscription: '$(serviceConnection)'
-        scriptType: 'bash'
-        scriptLocation: 'inlineScript'
-        inlineScript: |
-          set -euo pipefail
-
-          az deployment group what-if \
-            --resource-group $(resourceGroupName) \
-            --template-file infra/appservice/main.bicep \
-            --parameters appServicePlanSku=$(appServiceSku)
 
 
 # =========================================================
@@ -134,6 +120,18 @@ stages:
             exit 1
           fi
 
+          echo "Checking resource group..."
+
+          resourceGroupExists=$(az group exists \
+            --name $(resourceGroupName))
+
+          echo "Resource group exists: $resourceGroupExists"
+
+          if [ "$resourceGroupExists" != "true" ]; then
+            echo "##vso[task.logissue type=error]Resource group $(resourceGroupName) does not exist."
+            exit 1
+          fi
+
           echo "Checking App Service quota for SKU $sku in $(location)..."
 
           subscriptionId=$(az account show \
@@ -161,11 +159,42 @@ stages:
           fi
 
           if [ "$skuLimit" -lt 1 ]; then
-            echo "##vso[task.logissue type=error]App Service SKU $sku has a quota of 0 in $(location). Deployment cannot continue."
+            echo "##vso[task.logissue type=error]App Service SKU $sku has insufficient quota in $(location). Deployment cannot continue."
             exit 1
           fi
 
           echo "App Service readiness checks passed."
+
+
+# =========================================================
+# APP SERVICE - WHAT-IF
+# =========================================================
+
+- stage: AppServiceWhatIf
+  displayName: 'App Service What-If'
+  dependsOn: AppServiceReadiness
+  condition: succeeded()
+
+  jobs:
+
+  - job: AppServiceWhatIf
+    displayName: 'Preview App Service Changes'
+
+    steps:
+
+    - task: AzureCLI@2
+      displayName: 'App Service What-If'
+      inputs:
+        azureSubscription: '$(serviceConnection)'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          set -euo pipefail
+
+          az deployment group what-if \
+            --resource-group $(resourceGroupName) \
+            --template-file infra/appservice/main.bicep \
+            --parameters appServicePlanSku=$(appServiceSku)
 
 
 # =========================================================
@@ -174,7 +203,7 @@ stages:
 
 - stage: DeployAppService
   displayName: 'Deploy App Service'
-  dependsOn: AppServiceReadiness
+  dependsOn: AppServiceWhatIf
   condition: succeeded()
 
   jobs:
@@ -207,7 +236,7 @@ stages:
 
 
 # =========================================================
-# NETWORKING - VALIDATE
+# NETWORKING - VALIDATE BICEP
 # =========================================================
 
 - stage: ValidateNetworking
@@ -218,7 +247,7 @@ stages:
   jobs:
 
   - job: ValidateNetworking
-    displayName: 'Validate Networking Infrastructure'
+    displayName: 'Validate Networking Bicep'
 
     steps:
 
@@ -236,19 +265,6 @@ stages:
             --stdout > /dev/null
 
           echo "Networking Bicep validation passed."
-
-    - task: AzureCLI@2
-      displayName: 'Networking What-If'
-      inputs:
-        azureSubscription: '$(serviceConnection)'
-        scriptType: 'bash'
-        scriptLocation: 'inlineScript'
-        inlineScript: |
-          set -euo pipefail
-
-          az deployment group what-if \
-            --resource-group $(resourceGroupName) \
-            --template-file infra/networking/main.bicep
 
 
 # =========================================================
@@ -306,12 +322,42 @@ stages:
 
 
 # =========================================================
+# NETWORKING - WHAT-IF
+# =========================================================
+
+- stage: NetworkingWhatIf
+  displayName: 'Networking What-If'
+  dependsOn: NetworkingReadiness
+  condition: succeeded()
+
+  jobs:
+
+  - job: NetworkingWhatIf
+    displayName: 'Preview Networking Changes'
+
+    steps:
+
+    - task: AzureCLI@2
+      displayName: 'Networking What-If'
+      inputs:
+        azureSubscription: '$(serviceConnection)'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          set -euo pipefail
+
+          az deployment group what-if \
+            --resource-group $(resourceGroupName) \
+            --template-file infra/networking/main.bicep
+
+
+# =========================================================
 # NETWORKING - DEPLOY
 # =========================================================
 
 - stage: DeployNetworking
   displayName: 'Deploy Networking'
-  dependsOn: NetworkingReadiness
+  dependsOn: NetworkingWhatIf
   condition: succeeded()
 
   jobs:
