@@ -4,13 +4,27 @@ trigger:
 pool:
   vmImage: ubuntu-latest
 
+variables:
+  appServiceSku: 'S1'
+  location: 'uksouth'
+  resourceGroupName: 'rg-cloudplatformlab-dev'
+  serviceConnection: 'sc-cloudplatformlab-dev'
+  devEnvironment: 'env-cloudplatformlab-dev'
+
 stages:
 
-- stage: Validate
-  displayName: 'Build and Validate'
+# =========================================================
+# BUILD APPLICATION
+# =========================================================
+
+- stage: Build
+  displayName: 'Build Application'
+
   jobs:
-  - job: Validate
-    displayName: 'Build and Bicep What-If'
+
+  - job: BuildApplication
+    displayName: 'Build .NET Application'
+
     steps:
 
     - task: UseDotNet@2
@@ -32,30 +46,93 @@ stages:
         projects: '**/*.sln'
         arguments: '--configuration Release --no-restore'
 
+
+# =========================================================
+# APP SERVICE - VALIDATE BICEP
+# =========================================================
+
+- stage: ValidateAppService
+  displayName: 'Validate App Service'
+  dependsOn: Build
+  condition: succeeded()
+
+  jobs:
+
+  - job: ValidateAppService
+    displayName: 'Validate App Service Bicep'
+
+    steps:
+
     - task: AzureCLI@2
-      displayName: 'Pre-deployment checks'
+      displayName: 'Validate App Service Bicep'
       inputs:
-        azureSubscription: 'sc-cloudplatformlab-dev'
+        azureSubscription: '$(serviceConnection)'
         scriptType: 'bash'
         scriptLocation: 'inlineScript'
         inlineScript: |
           set -euo pipefail
 
+          az bicep build \
+            --file infra/appservice/main.bicep \
+            --stdout > /dev/null
+
+          echo "App Service Bicep validation passed."
+
+
+# =========================================================
+# APP SERVICE - READINESS
+# =========================================================
+
+- stage: AppServiceReadiness
+  displayName: 'App Service Readiness'
+  dependsOn: ValidateAppService
+  condition: succeeded()
+
+  jobs:
+
+  - job: AppServiceReadiness
+    displayName: 'Check App Service Deployment Readiness'
+
+    steps:
+
+    - task: AzureCLI@2
+      displayName: 'App Service Readiness Checks'
+      inputs:
+        azureSubscription: '$(serviceConnection)'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          set -euo pipefail
+
+          sku="$(appServiceSku)"
+
           echo "Checking Microsoft.Web registration..."
 
-          state=$(az provider show \
+          providerState=$(az provider show \
             --namespace Microsoft.Web \
             --query registrationState \
             --output tsv)
 
-          echo "Microsoft.Web registration state: $state"
+          echo "Microsoft.Web registration state: $providerState"
 
-          if [ "$state" != "Registered" ]; then
+          if [ "$providerState" != "Registered" ]; then
             echo "##vso[task.logissue type=error]Microsoft.Web is not registered."
             exit 1
           fi
 
-          echo "Checking S1 App Service quota in UK South..."
+          echo "Checking resource group..."
+
+          resourceGroupExists=$(az group exists \
+            --name $(resourceGroupName))
+
+          echo "Resource group exists: $resourceGroupExists"
+
+          if [ "$resourceGroupExists" != "true" ]; then
+            echo "##vso[task.logissue type=error]Resource group $(resourceGroupName) does not exist."
+            exit 1
+          fi
+
+          echo "Checking App Service quota for SKU $sku in $(location)..."
 
           subscriptionId=$(az account show \
             --query id \
@@ -63,49 +140,77 @@ stages:
 
           quotaJson=$(az rest \
             --method get \
-            --url "https://management.azure.com/subscriptions/${subscriptionId}/providers/Microsoft.Web/locations/uksouth/usages?api-version=2025-03-01")
+            --url "https://management.azure.com/subscriptions/${subscriptionId}/providers/Microsoft.Web/locations/$(location)/usages?api-version=2025-03-01")
 
-          s1Limit=$(echo "$quotaJson" | jq -r \
-            '.value[] | select(.name.value == "S1") | .limit')
+          skuLimit=$(echo "$quotaJson" | jq -r \
+            --arg sku "$sku" \
+            '.value[] | select(.name.value == $sku) | .limit')
 
-          s1Usage=$(echo "$quotaJson" | jq -r \
-            '.value[] | select(.name.value == "S1") | .currentValue')
+          skuUsage=$(echo "$quotaJson" | jq -r \
+            --arg sku "$sku" \
+            '.value[] | select(.name.value == $sku) | .currentValue')
 
-          echo "S1 quota limit: $s1Limit"
-          echo "S1 current usage: $s1Usage"
+          echo "$sku quota limit: $skuLimit"
+          echo "$sku current usage: $skuUsage"
 
-          if [ -z "$s1Limit" ]; then
-            echo "##vso[task.logissue type=error]Unable to determine S1 App Service quota."
+          if [ -z "$skuLimit" ] || [ "$skuLimit" = "null" ]; then
+            echo "##vso[task.logissue type=error]Unable to determine quota for App Service SKU $sku."
             exit 1
           fi
 
-          if [ "$s1Limit" -lt 1 ]; then
-            echo "##vso[task.logissue type=error]S1 App Service quota in UK South is 0. Deployment cannot continue."
+          if [ "$skuLimit" -lt 1 ]; then
+            echo "##vso[task.logissue type=error]App Service SKU $sku has insufficient quota in $(location). Deployment cannot continue."
             exit 1
           fi
 
-          echo "Pre-deployment checks passed."
+          echo "App Service readiness checks passed."
 
-    - task: AzureCLI@2
-      displayName: 'Bicep What-If'
-      inputs:
-        azureSubscription: 'sc-cloudplatformlab-dev'
-        scriptType: 'bash'
-        scriptLocation: 'inlineScript'
-        inlineScript: |
-          az deployment group what-if \
-            --resource-group rg-cloudplatformlab-dev \
-            --template-file infra/appservice/main.bicep
 
-- stage: DeployDev
-  displayName: 'Deploy Dev Infrastructure'
-  dependsOn: Validate
+# =========================================================
+# APP SERVICE - WHAT-IF
+# =========================================================
+
+- stage: AppServiceWhatIf
+  displayName: 'App Service What-If'
+  dependsOn: AppServiceReadiness
   condition: succeeded()
 
   jobs:
-  - deployment: DeployDevInfrastructure
-    displayName: 'Deploy Bicep to Dev'
-    environment: 'env-cloudplatformlab-dev'
+
+  - job: AppServiceWhatIf
+    displayName: 'Preview App Service Changes'
+
+    steps:
+
+    - task: AzureCLI@2
+      displayName: 'App Service What-If'
+      inputs:
+        azureSubscription: '$(serviceConnection)'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          set -euo pipefail
+
+          az deployment group what-if \
+            --resource-group $(resourceGroupName) \
+            --template-file infra/appservice/main.bicep \
+            --parameters appServicePlanSku=$(appServiceSku)
+
+
+# =========================================================
+# APP SERVICE - DEPLOY
+# =========================================================
+
+- stage: DeployAppService
+  displayName: 'Deploy App Service'
+  dependsOn: AppServiceWhatIf
+  condition: succeeded()
+
+  jobs:
+
+  - deployment: DeployAppService
+    displayName: 'Deploy App Service to Dev'
+    environment: '$(devEnvironment)'
 
     strategy:
       runOnce:
@@ -115,13 +220,169 @@ stages:
           - checkout: self
 
           - task: AzureCLI@2
-            displayName: 'Deploy Bicep'
+            displayName: 'Deploy App Service Bicep'
             inputs:
-              azureSubscription: 'sc-cloudplatformlab-dev'
+              azureSubscription: '$(serviceConnection)'
               scriptType: 'bash'
               scriptLocation: 'inlineScript'
               inlineScript: |
+                set -euo pipefail
+
                 az deployment group create \
-                  --resource-group rg-cloudplatformlab-dev \
+                  --resource-group $(resourceGroupName) \
                   --template-file infra/appservice/main.bicep \
-                  --name cloudplatformlab-dev
+                  --parameters appServicePlanSku=$(appServiceSku) \
+                  --name cloudplatformlab-appservice-dev
+
+
+# =========================================================
+# NETWORKING - VALIDATE BICEP
+# =========================================================
+
+- stage: ValidateNetworking
+  displayName: 'Validate Networking'
+  dependsOn: Build
+  condition: succeeded()
+
+  jobs:
+
+  - job: ValidateNetworking
+    displayName: 'Validate Networking Bicep'
+
+    steps:
+
+    - task: AzureCLI@2
+      displayName: 'Validate Networking Bicep'
+      inputs:
+        azureSubscription: '$(serviceConnection)'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          set -euo pipefail
+
+          az bicep build \
+            --file infra/networking/main.bicep \
+            --stdout > /dev/null
+
+          echo "Networking Bicep validation passed."
+
+
+# =========================================================
+# NETWORKING - READINESS
+# =========================================================
+
+- stage: NetworkingReadiness
+  displayName: 'Networking Readiness'
+  dependsOn: ValidateNetworking
+  condition: succeeded()
+
+  jobs:
+
+  - job: NetworkingReadiness
+    displayName: 'Check Networking Deployment Readiness'
+
+    steps:
+
+    - task: AzureCLI@2
+      displayName: 'Networking Readiness Checks'
+      inputs:
+        azureSubscription: '$(serviceConnection)'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          set -euo pipefail
+
+          echo "Checking Microsoft.Network registration..."
+
+          providerState=$(az provider show \
+            --namespace Microsoft.Network \
+            --query registrationState \
+            --output tsv)
+
+          echo "Microsoft.Network registration state: $providerState"
+
+          if [ "$providerState" != "Registered" ]; then
+            echo "##vso[task.logissue type=error]Microsoft.Network is not registered."
+            exit 1
+          fi
+
+          echo "Checking resource group..."
+
+          resourceGroupExists=$(az group exists \
+            --name $(resourceGroupName))
+
+          echo "Resource group exists: $resourceGroupExists"
+
+          if [ "$resourceGroupExists" != "true" ]; then
+            echo "##vso[task.logissue type=error]Resource group $(resourceGroupName) does not exist."
+            exit 1
+          fi
+
+          echo "Networking readiness checks passed."
+
+
+# =========================================================
+# NETWORKING - WHAT-IF
+# =========================================================
+
+- stage: NetworkingWhatIf
+  displayName: 'Networking What-If'
+  dependsOn: NetworkingReadiness
+  condition: succeeded()
+
+  jobs:
+
+  - job: NetworkingWhatIf
+    displayName: 'Preview Networking Changes'
+
+    steps:
+
+    - task: AzureCLI@2
+      displayName: 'Networking What-If'
+      inputs:
+        azureSubscription: '$(serviceConnection)'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          set -euo pipefail
+
+          az deployment group what-if \
+            --resource-group $(resourceGroupName) \
+            --template-file infra/networking/main.bicep
+
+
+# =========================================================
+# NETWORKING - DEPLOY
+# =========================================================
+
+- stage: DeployNetworking
+  displayName: 'Deploy Networking'
+  dependsOn: NetworkingWhatIf
+  condition: succeeded()
+
+  jobs:
+
+  - deployment: DeployNetworking
+    displayName: 'Deploy Networking to Dev'
+    environment: '$(devEnvironment)'
+
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+
+          - checkout: self
+
+          - task: AzureCLI@2
+            displayName: 'Deploy Networking Bicep'
+            inputs:
+              azureSubscription: '$(serviceConnection)'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                set -euo pipefail
+
+                az deployment group create \
+                  --resource-group $(resourceGroupName) \
+                  --template-file infra/networking/main.bicep \
+                  --name cloudplatformlab-networking-dev
