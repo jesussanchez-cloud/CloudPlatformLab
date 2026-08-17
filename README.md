@@ -10,42 +10,48 @@ The platform is being developed incrementally, with implemented capabilities sep
 
 ## Architecture
 
-The application platform is designed around Azure App Service, with infrastructure defined in Bicep and validated through Azure DevOps.
+The platform is built as independently deployable infrastructure areas, with infrastructure defined in Bicep and validated and deployed through Azure DevOps.
 
 ```text
-                    Azure DevOps
-                         |
-                         v
-                 Build and Validate
-                         |
-                         v
-              Pre-deployment Checks
-                         |
-                         v
-                   Bicep What-If
-                         |
-                         v
-                  Manual Approval
-                         |
-                         v
-                  Bicep Deployment
-                         |
-                         v
-                Azure Resource Group
-                         |
-                  App Service Plan
-                         |
-                         v
-                    App Service
-                         |
-                         +---- dev slot
+                         Azure DevOps
+                              |
+                              v
+                       Build Application
+                              |
+                +-------------+-------------+
+                |             |             |
+                v             v             v
+          App Service     Networking   Observability
+                |             |             |
+                v             v             v
+           Validation      Validation      Validation
+                |             |             |
+                v             v             v
+            Readiness       Readiness       Readiness
+                |             |             |
+                v             v             v
+             What-If         What-If         What-If
+                |             |             |
+                v             v             v
+             Approval        Approval        Approval
+                |             |             |
+                v             v             v
+            Deployment     Deployment     Deployment
+            quota blocked      |             |
+                               v             v
+                         Virtual Network  Log Analytics
+                                           |
+                                           v
+                                    Application Insights
 ```
 
-The main App Service represents the production application.
+The networking and observability foundations have been successfully deployed through their controlled pipeline paths.
 
-Development changes are designed to be deployed to the `dev` slot first so they can be validated before being promoted to production.
+The App Service infrastructure follows an independent deployment path. It is defined and validated through Bicep, but provisioning is currently blocked by a subscription-level App Service quota constraint.
 
-> **Deployment status:** The App Service infrastructure is defined in Bicep and has been successfully validated through Bicep What-If. Final S1 provisioning is currently blocked by a subscription-level App Service quota constraint. See [Deployment Validation and Evidence](#deployment-validation-and-evidence).
+Keeping the infrastructure paths independent allows one platform constraint to fail safely without unnecessarily preventing unrelated infrastructure from being validated or deployed.
+
+> **App Service deployment status:** The App Service infrastructure is defined in Bicep and validated independently. Final provisioning using the currently selected S1 SKU is blocked by an App Service quota of `0`. See [Deployment Validation and Evidence](#deployment-validation-and-evidence).
 
 ---
 
@@ -138,23 +144,41 @@ Currently implemented:
 - App Service infrastructure defined in Bicep
 - `dev` deployment slot defined in Bicep
 - system-assigned managed identity defined in Bicep
-- App Service infrastructure validated through Bicep What-If
+- App Service infrastructure validated through Bicep
 
 ---
 
 ## Infrastructure as Code
 
-Azure infrastructure is defined using Bicep.
+Azure infrastructure is defined using Bicep and separated by platform concern.
 
-The current App Service Bicep template defines:
+Current infrastructure definitions include:
 
-- S1 App Service Plan
+```text
+infra/
++-- appservice/
+|   +-- main.bicep
+|
++-- networking/
+|   +-- main.bicep
+|
++-- observability/
+    +-- main.bicep
+```
+
+The App Service template defines:
+
+- configurable App Service Plan SKU
 - App Service
 - `dev` deployment slot
 - system-assigned managed identity
 - HTTPS-only configuration
 - TLS 1.2 minimum
 - resource tags
+
+The networking template defines the Dev virtual network and subnet foundation.
+
+The observability template defines the Log Analytics workspace and workspace-based Application Insights resource.
 
 The development infrastructure targets a dedicated resource group in UK South:
 
@@ -170,7 +194,7 @@ Infrastructure is validated before deployment rather than relying on manually co
 
 ## Networking
 
-The Dev environment now includes a networking foundation deployed through Bicep and the Azure DevOps pipeline.
+The Dev environment includes a networking foundation deployed through Bicep and the Azure DevOps pipeline.
 
 The current networking infrastructure consists of:
 
@@ -178,10 +202,13 @@ The current networking infrastructure consists of:
 - `snet-app` — `10.10.1.0/24`
 - `snet-private-endpoints` — `10.10.2.0/24`
 
-Networking changes follow the same controlled deployment process as the rest of the infrastructure:
+Networking changes follow a controlled deployment process:
 
 ```text
 Networking Bicep
+      |
+      v
+Validation
       |
       v
 Readiness Checks
@@ -204,13 +231,66 @@ Hub-spoke networking, VNet peering, Private DNS and Private Endpoints remain par
 
 ---
 
+## Observability
+
+The Dev environment now includes an observability foundation deployed through Bicep and the Azure DevOps pipeline.
+
+The current observability infrastructure consists of:
+
+- `log-cloudplatformlab-dev` — Log Analytics workspace
+- `appi-cloudplatformlab-dev` — workspace-based Application Insights
+- 30-day Log Analytics data retention
+
+Application Insights is linked to the Log Analytics workspace so application telemetry can use the workspace as the central observability data store as the application deployment path develops.
+
+```text
+Application Insights
+appi-cloudplatformlab-dev
+          |
+          v
+Log Analytics Workspace
+log-cloudplatformlab-dev
+          |
+          v
+   30-day retention
+```
+
+Observability follows its own controlled deployment path:
+
+```text
+Observability Bicep
+      |
+      v
+Validation
+      |
+      v
+Readiness Checks
+      |
+      v
+Bicep What-If
+      |
+      v
+Manual Approval
+      |
+      v
+Observability Deployment
+```
+
+The readiness stage validates the required Azure resource providers and target resource group before the deployment path continues.
+
+The observability foundation has been successfully provisioned through this process.
+
+Application telemetry integration, alerts, Action Groups, health monitoring and additional operational controls will be introduced as workloads requiring those capabilities are deployed.
+
+---
+
 ## CI/CD
 
 Azure DevOps is used for CI/CD.
 
 Changes are developed using feature branches and merged into `Dev` through pull requests.
 
-The current pipeline follows this process:
+After the application build, infrastructure areas follow independent validation and deployment paths:
 
 ```text
 Feature branch
@@ -224,30 +304,34 @@ Dev
       v
 Restore & Build
       |
-      v
-IaC Validation
-      |
-      v
-Pre-deployment Checks
-      |
-      v
-Bicep What-If
-      |
-      v
-Azure DevOps Environment
-      |
-      v
-Manual Approval
-      |
-      v
-Infrastructure Deployment
+      +---------------------------+---------------------------+
+      |                           |                           |
+      v                           v                           v
+App Service Path            Networking Path            Observability Path
+      |                           |                           |
+      v                           v                           v
+Validation                  Validation                  Validation
+      |                           |                           |
+      v                           v                           v
+Readiness                   Readiness                   Readiness
+      |                           |                           |
+      v                           v                           v
+Bicep What-If               Bicep What-If               Bicep What-If
+      |                           |                           |
+      v                           v                           v
+Manual Approval             Manual Approval             Manual Approval
+      |                           |                           |
+      v                           v                           v
+Deployment                  Deployment                  Deployment
 ```
 
-Bicep What-If runs before the deployment stage so proposed infrastructure changes can be reviewed before anything is changed in Azure.
+Separating infrastructure paths prevents an environmental constraint affecting one platform area from unnecessarily blocking another.
+
+This is currently demonstrated by the App Service quota constraint: the App Service path can stop during readiness validation while networking and observability continue independently.
+
+Bicep What-If runs before deployment so proposed infrastructure changes can be reviewed before anything is changed in Azure.
 
 Infrastructure deployment uses an Azure DevOps Environment with an approval check, providing a control point between validating an infrastructure change and applying it.
-
-Pre-deployment checks are used to detect Azure subscription prerequisites before reaching the deployment stage.
 
 ---
 
@@ -255,33 +339,45 @@ Pre-deployment checks are used to detect Azure subscription prerequisites before
 
 The infrastructure deployment workflow is implemented through Azure DevOps and Bicep.
 
-The pipeline currently performs:
+The pipeline currently provides:
 
 - .NET 8 restore and build
-- Azure subscription pre-deployment checks
-- `Microsoft.Web` resource provider validation
-- App Service S1 quota validation
+- independent infrastructure validation paths
+- Azure subscription and deployment readiness checks
+- resource-provider validation
+- App Service SKU quota validation
+- Bicep validation
 - Bicep What-If before deployment
-- Azure DevOps Environment approval before Dev infrastructure deployment
+- Azure DevOps Environment approval
+- Bicep resource-group deployment
 - Azure authentication through Workload Identity Federation
 
-The Bicep What-If has successfully validated the intended creation of:
+### App Service deployment constraint
 
-- Standard S1 App Service Plan
-- Products API App Service
-- `dev` deployment slot
+App Service provisioning using the currently selected S1 SKU is blocked by an Azure subscription-level quota of `0`.
 
-The template also defines HTTPS-only access, TLS 1.2, resource tagging and system-assigned managed identity.
+Rather than bypassing the deployment controls or manually creating resources, the App Service readiness stage detects this condition and stops its deployment path.
 
-### Current deployment constraint
+This is an Azure subscription constraint rather than a Bicep validation failure.
 
-Final S1 provisioning is currently blocked by an Azure subscription-level App Service quota of `0`.
+The App Service SKU is parameterised so the infrastructure architecture is not permanently tied to S1.
 
-Rather than bypassing the deployment controls or manually creating resources, the pipeline detects this condition during pre-deployment validation and stops before infrastructure deployment.
+The independent pipeline architecture means this constraint does not prevent networking or observability infrastructure from being validated and deployed.
 
-This is an Azure subscription quota constraint rather than a Bicep validation failure. No S1 App Service resources were provisioned by the failed deployment.
+### Successfully deployed infrastructure
 
-The failed deployment path was used to improve the pipeline so that subscription prerequisites are now detected earlier in the deployment lifecycle.
+The networking deployment path has successfully provisioned:
+
+- `vnet-cloudplatformlab-dev`
+- `snet-app`
+- `snet-private-endpoints`
+
+The observability deployment path has successfully provisioned:
+
+- `log-cloudplatformlab-dev`
+- `appi-cloudplatformlab-dev`
+- workspace-based Application Insights integration
+- 30-day Log Analytics retention
 
 ### Evidence
 
@@ -294,6 +390,10 @@ Pipeline and IaC evidence is available in [`docs/evidence`](docs/evidence/):
 - [Networking Bicep deployment](docs/evidence/05-networking-bicep-deployment-success.png)
 - [Deployed Azure Virtual Network](docs/evidence/06-networking-vnet-deployed-azure.png)
 - [Deployed networking subnets](docs/evidence/07-networking-subnets-deployed-azure.png)
+- [Observability deployment pipeline](docs/evidence/08-observability-deployment-pipeline.png)
+- [Application Insights deployed and linked to Log Analytics](docs/evidence/09-application-insights-deployed.png)
+- [Log Analytics workspace deployed](docs/evidence/10-log-analytics-workspace-deployed.png)
+- [Log Analytics 30-day data retention](docs/evidence/11-log-analytics-data-retention.png)
 
 Additional architectural decisions and implementation details are documented in [`docs/architecture.md`](docs/architecture.md).
 
@@ -316,6 +416,7 @@ Security controls currently implemented or represented in the deployment archite
 - Azure RBAC
 - controlled Azure DevOps service connection
 - manual deployment approval
+- infrastructure readiness validation
 
 Secrets and credentials are not stored in the repository.
 
@@ -362,6 +463,10 @@ Before deploying paid infrastructure:
 6. Validate the deployed infrastructure.
 7. Remove paid resources when they are no longer required.
 
+The Log Analytics workspace currently uses a 30-day retention period to provide an observability foundation while keeping data retention appropriate for a development environment.
+
+As telemetry sources are introduced, ingestion volume and retention will be reviewed as part of the platform's cost controls.
+
 Because the environment is defined as code, resources can be destroyed when they are not needed and recreated later from Bicep.
 
 This also tests infrastructure reproducibility rather than relying on resources that were configured manually and left running indefinitely.
@@ -387,9 +492,14 @@ Dev
     |
     v
 Build and Infrastructure Validation
+    |
+    v
+Controlled Dev Deployment
 ```
 
-Infrastructure, pipeline and documentation changes go through feature branches and pull requests rather than being changed directly on `Dev`.
+Infrastructure, pipeline and documentation changes normally go through feature branches and pull requests rather than being changed directly on `Dev`.
+
+Feature-branch pipeline runs are used to validate infrastructure and pipeline behaviour before changes are merged. Dev environment deployments are performed from the merged `Dev` branch.
 
 After changes are merged, the public GitHub repository is synchronized with the Azure Repos version.
 
@@ -409,6 +519,9 @@ CloudPlatformLab
 |   |   +-- main.bicep
 |   |
 |   +-- networking
+|   |   +-- main.bicep
+|   |
+|   +-- observability
 |       +-- main.bicep
 |
 +-- tests
@@ -430,7 +543,9 @@ The `tests` area is currently being prepared. Genuine automated tests will be ad
 
 ## Deployment Strategy
 
-The application deployment architecture uses one App Service with a development deployment slot.
+Infrastructure areas are independently validated and deployed so that unrelated platform constraints do not block one another.
+
+For the application platform, the intended deployment architecture uses one App Service with a development deployment slot.
 
 ```text
 Dev branch
@@ -448,7 +563,7 @@ Validation
 Production
 ```
 
-The intended promotion path validates changes in the `dev` slot before promoting them to the main production App Service.
+The intended promotion path validates application changes in the `dev` slot before promoting them to the main production App Service.
 
 Deployment slot swapping and rollback can then provide controlled promotion and recovery once the application deployment path is operational.
 
@@ -505,14 +620,15 @@ The intention is not to maintain two identical implementations of every resource
 
 ## Current Work
 
-The networking foundation and independent infrastructure deployment paths are now implemented and validated through the Dev pipeline.
+The networking and observability foundations and independent infrastructure deployment paths are now implemented and validated through the Dev pipeline.
 
-The next phase will extend the platform with additional security, observability and private connectivity capabilities.
+The next phase will extend the platform with additional security, operational and private-connectivity capabilities.
 
 Current priorities are:
 
 - add automated application tests
-- introduce observability with Application Insights and Azure Monitor
+- integrate application telemetry with Application Insights when the application deployment path is operational
+- introduce Azure Monitor alerts and Action Groups
 - add Key Vault and managed-identity based access where required
 - introduce Private Endpoints and Private DNS as dependent platform services are added
 - extend governance with Azure Policy
@@ -543,7 +659,9 @@ The architecture and documentation will continue to evolve alongside implemented
 - Git
 - GitHub
 - Azure Virtual Network
-- Subnet architecture
+- Azure Subnets
+- Application Insights
+- Log Analytics
 
 ### Defined / In Progress
 
@@ -555,9 +673,8 @@ The architecture and documentation will continue to evolve alongside implemented
 - Terraform
 - Azure Key Vault
 - Azure Policy
-- Azure Monitor
-- Application Insights
-- Log Analytics
+- Azure Monitor alerts
+- Action Groups
 - Azure SQL
 - Azure Storage
 - Azure Service Bus
