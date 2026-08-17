@@ -1,0 +1,181 @@
+parameters:
+- name: dependsOn
+  type: string
+
+- name: resourceGroupName
+  type: string
+
+- name: serviceConnection
+  type: string
+
+- name: devEnvironment
+  type: string
+
+
+stages:
+
+# =========================================================
+# OBSERVABILITY - VALIDATE
+# =========================================================
+
+- stage: ValidateObservability
+  displayName: 'Validate Observability'
+  dependsOn: ${{ parameters.dependsOn }}
+  condition: succeeded()
+
+  jobs:
+
+  - job: ValidateObservability
+    displayName: 'Validate Observability Bicep'
+
+    steps:
+
+    - task: AzureCLI@2
+      displayName: 'Validate Observability Bicep'
+      inputs:
+        azureSubscription: ${{ parameters.serviceConnection }}
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          set -euo pipefail
+
+          az bicep build \
+            --file infra/observability/main.bicep \
+            --stdout > /dev/null
+
+          echo "Observability Bicep validation passed."
+
+
+# =========================================================
+# OBSERVABILITY - READINESS
+# =========================================================
+
+- stage: ObservabilityReadiness
+  displayName: 'Observability Readiness'
+  dependsOn: ValidateObservability
+  condition: succeeded()
+
+  jobs:
+
+  - job: ObservabilityReadiness
+    displayName: 'Check Observability Deployment Readiness'
+
+    steps:
+
+    - task: AzureCLI@2
+      displayName: 'Observability Readiness Checks'
+      inputs:
+        azureSubscription: ${{ parameters.serviceConnection }}
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          set -euo pipefail
+
+          echo "Checking Microsoft.OperationalInsights registration..."
+
+          operationalInsightsState=$(az provider show \
+            --namespace Microsoft.OperationalInsights \
+            --query registrationState \
+            --output tsv)
+
+          echo "Microsoft.OperationalInsights registration state: $operationalInsightsState"
+
+          if [ "$operationalInsightsState" != "Registered" ]; then
+            echo "##vso[task.logissue type=error]Microsoft.OperationalInsights is not registered."
+            exit 1
+          fi
+
+          echo "Checking Microsoft.Insights registration..."
+
+          insightsState=$(az provider show \
+            --namespace Microsoft.Insights \
+            --query registrationState \
+            --output tsv)
+
+          echo "Microsoft.Insights registration state: $insightsState"
+
+          if [ "$insightsState" != "Registered" ]; then
+            echo "##vso[task.logissue type=error]Microsoft.Insights is not registered."
+            exit 1
+          fi
+
+          echo "Checking resource group..."
+
+          resourceGroupExists=$(az group exists \
+            --name ${{ parameters.resourceGroupName }})
+
+          echo "Resource group exists: $resourceGroupExists"
+
+          if [ "$resourceGroupExists" != "true" ]; then
+            echo "##vso[task.logissue type=error]Resource group ${{ parameters.resourceGroupName }} does not exist."
+            exit 1
+          fi
+
+          echo "Observability readiness checks passed."
+
+
+# =========================================================
+# OBSERVABILITY - WHAT-IF
+# =========================================================
+
+- stage: ObservabilityWhatIf
+  displayName: 'Observability What-If'
+  dependsOn: ObservabilityReadiness
+  condition: succeeded()
+
+  jobs:
+
+  - job: ObservabilityWhatIf
+    displayName: 'Preview Observability Changes'
+
+    steps:
+
+    - task: AzureCLI@2
+      displayName: 'Observability What-If'
+      inputs:
+        azureSubscription: ${{ parameters.serviceConnection }}
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          set -euo pipefail
+
+          az deployment group what-if \
+            --resource-group ${{ parameters.resourceGroupName }} \
+            --template-file infra/observability/main.bicep
+
+
+# =========================================================
+# OBSERVABILITY - DEPLOY
+# =========================================================
+
+- stage: DeployObservability
+  displayName: 'Deploy Observability'
+  dependsOn: ObservabilityWhatIf
+  condition: succeeded()
+
+  jobs:
+
+  - deployment: DeployObservability
+    displayName: 'Deploy Observability to Dev'
+    environment: ${{ parameters.devEnvironment }}
+
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+
+          - checkout: self
+
+          - task: AzureCLI@2
+            displayName: 'Deploy Observability Bicep'
+            inputs:
+              azureSubscription: ${{ parameters.serviceConnection }}
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                set -euo pipefail
+
+                az deployment group create \
+                  --resource-group ${{ parameters.resourceGroupName }} \
+                  --template-file infra/observability/main.bicep \
+                  --name cloudplatformlab-observability-dev

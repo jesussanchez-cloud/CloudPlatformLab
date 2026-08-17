@@ -1,0 +1,167 @@
+parameters:
+- name: dependsOn
+  type: string
+
+- name: resourceGroupName
+  type: string
+
+- name: serviceConnection
+  type: string
+
+- name: devEnvironment
+  type: string
+
+
+stages:
+
+# =========================================================
+# NETWORKING - VALIDATE
+# =========================================================
+
+- stage: ValidateNetworking
+  displayName: 'Validate Networking'
+  dependsOn: ${{ parameters.dependsOn }}
+  condition: succeeded()
+
+  jobs:
+
+  - job: ValidateNetworking
+    displayName: 'Validate Networking Bicep'
+
+    steps:
+
+    - task: AzureCLI@2
+      displayName: 'Validate Networking Bicep'
+      inputs:
+        azureSubscription: ${{ parameters.serviceConnection }}
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          set -euo pipefail
+
+          az bicep build \
+            --file infra/networking/main.bicep \
+            --stdout > /dev/null
+
+          echo "Networking Bicep validation passed."
+
+
+# =========================================================
+# NETWORKING - READINESS
+# =========================================================
+
+- stage: NetworkingReadiness
+  displayName: 'Networking Readiness'
+  dependsOn: ValidateNetworking
+  condition: succeeded()
+
+  jobs:
+
+  - job: NetworkingReadiness
+    displayName: 'Check Networking Deployment Readiness'
+
+    steps:
+
+    - task: AzureCLI@2
+      displayName: 'Networking Readiness Checks'
+      inputs:
+        azureSubscription: ${{ parameters.serviceConnection }}
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          set -euo pipefail
+
+          echo "Checking Microsoft.Network registration..."
+
+          providerState=$(az provider show \
+            --namespace Microsoft.Network \
+            --query registrationState \
+            --output tsv)
+
+          echo "Microsoft.Network registration state: $providerState"
+
+          if [ "$providerState" != "Registered" ]; then
+            echo "##vso[task.logissue type=error]Microsoft.Network is not registered."
+            exit 1
+          fi
+
+          echo "Checking resource group..."
+
+          resourceGroupExists=$(az group exists \
+            --name ${{ parameters.resourceGroupName }})
+
+          echo "Resource group exists: $resourceGroupExists"
+
+          if [ "$resourceGroupExists" != "true" ]; then
+            echo "##vso[task.logissue type=error]Resource group ${{ parameters.resourceGroupName }} does not exist."
+            exit 1
+          fi
+
+          echo "Networking readiness checks passed."
+
+
+# =========================================================
+# NETWORKING - WHAT-IF
+# =========================================================
+
+- stage: NetworkingWhatIf
+  displayName: 'Networking What-If'
+  dependsOn: NetworkingReadiness
+  condition: succeeded()
+
+  jobs:
+
+  - job: NetworkingWhatIf
+    displayName: 'Preview Networking Changes'
+
+    steps:
+
+    - task: AzureCLI@2
+      displayName: 'Networking What-If'
+      inputs:
+        azureSubscription: ${{ parameters.serviceConnection }}
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          set -euo pipefail
+
+          az deployment group what-if \
+            --resource-group ${{ parameters.resourceGroupName }} \
+            --template-file infra/networking/main.bicep
+
+
+# =========================================================
+# NETWORKING - DEPLOY
+# =========================================================
+
+- stage: DeployNetworking
+  displayName: 'Deploy Networking'
+  dependsOn: NetworkingWhatIf
+  condition: succeeded()
+
+  jobs:
+
+  - deployment: DeployNetworking
+    displayName: 'Deploy Networking to Dev'
+    environment: ${{ parameters.devEnvironment }}
+
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+
+          - checkout: self
+
+          - task: AzureCLI@2
+            displayName: 'Deploy Networking Bicep'
+            inputs:
+              azureSubscription: ${{ parameters.serviceConnection }}
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                set -euo pipefail
+
+                az deployment group create \
+                  --resource-group ${{ parameters.resourceGroupName }} \
+                  --template-file infra/networking/main.bicep \
+                  --name cloudplatformlab-networking-dev

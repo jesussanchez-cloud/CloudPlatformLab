@@ -1,0 +1,167 @@
+parameters:
+- name: dependsOn
+  type: string
+
+- name: resourceGroupName
+  type: string
+
+- name: serviceConnection
+  type: string
+
+- name: devEnvironment
+  type: string
+
+
+stages:
+
+# =========================================================
+# SECURITY - VALIDATE
+# =========================================================
+
+- stage: ValidateSecurity
+  displayName: 'Validate Security'
+  dependsOn: ${{ parameters.dependsOn }}
+  condition: succeeded()
+
+  jobs:
+
+  - job: ValidateSecurity
+    displayName: 'Validate Security Bicep'
+
+    steps:
+
+    - task: AzureCLI@2
+      displayName: 'Validate Security Bicep'
+      inputs:
+        azureSubscription: ${{ parameters.serviceConnection }}
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          set -euo pipefail
+
+          az bicep build \
+            --file infra/security/main.bicep \
+            --stdout > /dev/null
+
+          echo "Security Bicep validation passed."
+
+
+# =========================================================
+# SECURITY - READINESS
+# =========================================================
+
+- stage: SecurityReadiness
+  displayName: 'Security Readiness'
+  dependsOn: ValidateSecurity
+  condition: succeeded()
+
+  jobs:
+
+  - job: SecurityReadiness
+    displayName: 'Check Security Deployment Readiness'
+
+    steps:
+
+    - task: AzureCLI@2
+      displayName: 'Security Readiness Checks'
+      inputs:
+        azureSubscription: ${{ parameters.serviceConnection }}
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          set -euo pipefail
+
+          echo "Checking Microsoft.KeyVault registration..."
+
+          providerState=$(az provider show \
+            --namespace Microsoft.KeyVault \
+            --query registrationState \
+            --output tsv)
+
+          echo "Microsoft.KeyVault registration state: $providerState"
+
+          if [ "$providerState" != "Registered" ]; then
+            echo "##vso[task.logissue type=error]Microsoft.KeyVault is not registered."
+            exit 1
+          fi
+
+          echo "Checking resource group..."
+
+          resourceGroupExists=$(az group exists \
+            --name ${{ parameters.resourceGroupName }})
+
+          echo "Resource group exists: $resourceGroupExists"
+
+          if [ "$resourceGroupExists" != "true" ]; then
+            echo "##vso[task.logissue type=error]Resource group ${{ parameters.resourceGroupName }} does not exist."
+            exit 1
+          fi
+
+          echo "Security readiness checks passed."
+
+
+# =========================================================
+# SECURITY - WHAT-IF
+# =========================================================
+
+- stage: SecurityWhatIf
+  displayName: 'Security What-If'
+  dependsOn: SecurityReadiness
+  condition: succeeded()
+
+  jobs:
+
+  - job: SecurityWhatIf
+    displayName: 'Preview Security Changes'
+
+    steps:
+
+    - task: AzureCLI@2
+      displayName: 'Security What-If'
+      inputs:
+        azureSubscription: ${{ parameters.serviceConnection }}
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          set -euo pipefail
+
+          az deployment group what-if \
+            --resource-group ${{ parameters.resourceGroupName }} \
+            --template-file infra/security/main.bicep
+
+
+# =========================================================
+# SECURITY - DEPLOY
+# =========================================================
+
+- stage: DeploySecurity
+  displayName: 'Deploy Security'
+  dependsOn: SecurityWhatIf
+  condition: succeeded()
+
+  jobs:
+
+  - deployment: DeploySecurity
+    displayName: 'Deploy Security to Dev'
+    environment: ${{ parameters.devEnvironment }}
+
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+
+          - checkout: self
+
+          - task: AzureCLI@2
+            displayName: 'Deploy Security Bicep'
+            inputs:
+              azureSubscription: ${{ parameters.serviceConnection }}
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                set -euo pipefail
+
+                az deployment group create \
+                  --resource-group ${{ parameters.resourceGroupName }} \
+                  --template-file infra/security/main.bicep \
+                  --name cloudplatformlab-security-dev
