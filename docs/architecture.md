@@ -10,51 +10,48 @@ The project is being built incrementally so that each part can be understood, te
 
 ## Current Architecture
 
-CloudPlatformLab currently has deployed Dev networking and observability foundations, with the application platform defined separately in Bicep.
+CloudPlatformLab currently has deployed Dev networking, observability and security foundations, with the application platform defined separately in Bicep.
 
 ```text
-                         Azure DevOps
-                              |
-                              v
-                       Build Application
-                              |
-                +-------------+-------------+
-                |             |             |
-                v             v             v
-          App Service     Networking   Observability
-                |             |             |
-                v             v             v
-           Validation      Validation      Validation
-                |             |             |
-                v             v             v
-            Readiness       Readiness       Readiness
-                |             |             |
-                v             v             v
-             What-If         What-If         What-If
-                |             |             |
-                v             v             v
-             Approval        Approval        Approval
-                |             |             |
-                v             v             v
-            Deployment     Deployment     Deployment
-            quota blocked      |             |
-                               v             v
-                         Virtual Network  Log Analytics
-                               |             ^
-                    +----------+----------+  |
-                    |                     |  |
-                    v                     v  |
-                 snet-app       snet-private-endpoints
-                                             |
-                                      Application Insights
-                                      linked to workspace
+                              Azure DevOps
+                                   |
+                                   v
+                            Build Application
+                                   |
+              +--------------------+--------------------+
+              |                    |                    |
+              v                    v                    v
+        App Service            Networking         Observability
+              |                    |                    |
+              +--------------------+--------------------+
+                                   |
+                                   v
+                                Security
+
+Each infrastructure domain follows:
+
+Validation
+    |
+    v
+Readiness
+    |
+    v
+What-If
+    |
+    v
+Manual Approval
+    |
+    v
+Deployment
 ```
 
-The networking and observability deployment paths have both been successfully executed through Azure DevOps, including validation, readiness checks, Bicep What-If, manual environment approval and Bicep deployment.
+The networking, observability and security deployment paths have been successfully executed through Azure DevOps.
 
 The App Service infrastructure follows an independent deployment path. Its Bicep definition is valid, but provisioning using the currently selected S1 SKU is blocked by the subscription's App Service quota.
 
-Keeping these deployment paths independent allows networking and observability infrastructure to be validated and deployed without being blocked by an unrelated application-platform constraint.
+Keeping these deployment paths independent allows networking, observability and security infrastructure to be validated and deployed without being blocked by an unrelated application-platform constraint.
+
+The Azure DevOps pipeline has also been modularised into reusable YAML templates so that each infrastructure domain can evolve independently without turning the root pipeline into a large monolithic definition.
 
 ---
 
@@ -92,6 +89,9 @@ infra/
 |   +-- main.bicep
 |
 +-- observability/
+|   +-- main.bicep
+|
++-- security/
     +-- main.bicep
 ```
 
@@ -119,6 +119,15 @@ The observability template defines:
 - 30-day Log Analytics retention
 - common resource tags
 
+The security template defines:
+
+- Azure Key Vault
+- Azure RBAC authorization model
+- soft delete
+- 90-day soft-delete retention
+- purge protection
+- common resource tags
+
 Infrastructure is deployed into:
 
 ```text
@@ -134,6 +143,8 @@ UK South
 Separating infrastructure by platform concern allows each area to be validated, deployed and evolved independently while remaining managed through the same repository and CI/CD workflow.
 
 Using Bicep means the environment can be recreated instead of relying on manually configured resources.
+
+Repeated deployments converge Azure towards the declared state rather than creating duplicate resources.
 
 ---
 
@@ -189,13 +200,59 @@ Application telemetry integration, Azure Monitor alerts, Action Groups, health m
 
 ---
 
+## Security Architecture
+
+The Dev environment now includes a Key Vault security foundation deployed through Bicep and the controlled Azure DevOps pipeline.
+
+```text
+kv-cloudplatformlab-dev
+Azure Key Vault
+        |
+        +-- Azure RBAC authorization
+        |
+        +-- Soft delete
+        |     90-day retention
+        |
+        +-- Purge protection
+        |
+        +-- Project tags
+```
+
+The Key Vault uses Azure RBAC rather than the legacy Key Vault access-policy model.
+
+Soft delete provides recovery protection for deleted vault content, while purge protection prevents destructive permanent deletion during the configured protection period.
+
+Public network access remains enabled at this stage deliberately.
+
+Private network access will be introduced later through Private Endpoints and Private DNS as part of the private-connectivity phase rather than mixing network architecture changes into the initial Key Vault security foundation.
+
+The App Service definition already includes a system-assigned managed identity. Once the application platform can be deployed, that managed identity can be granted an appropriate Key Vault data-plane role so the application can access secrets without storing credentials.
+
+No application secrets are committed to the repository.
+
+---
+
 ## Deployment Architecture
 
 Azure DevOps is used for CI/CD.
 
 Changes are developed in feature branches and merged into `Dev` through pull requests. The `Dev` branch is the deployment source for the Dev environment.
 
-After the shared application build, infrastructure is separated into independent deployment paths.
+As the platform grew, the pipeline was refactored from one large YAML file into a root orchestration pipeline with reusable stage templates.
+
+```text
+azure-pipelines.yml
+        |
+        +-- pipelines/templates/appservice.yml
+        |
+        +-- pipelines/templates/networking.yml
+        |
+        +-- pipelines/templates/observability.yml
+        |
+        +-- pipelines/templates/security.yml
+```
+
+The root pipeline performs the shared application build and then invokes the independent infrastructure templates.
 
 ```text
 Feature branch
@@ -209,30 +266,30 @@ Dev
       v
 Build Application
       |
-      +---------------------------+---------------------------+
-      |                           |                           |
-      v                           v                           v
-App Service Path            Networking Path            Observability Path
-      |                           |                           |
-      v                           v                           v
-Validation                  Validation                  Validation
-      |                           |                           |
-      v                           v                           v
-Readiness                   Readiness                   Readiness
-      |                           |                           |
-      v                           v                           v
-Bicep What-If               Bicep What-If               Bicep What-If
-      |                           |                           |
-      v                           v                           v
-Manual Approval             Manual Approval             Manual Approval
-      |                           |                           |
-      v                           v                           v
-Deployment                  Deployment                  Deployment
+      +---------------+---------------+---------------+
+      |               |               |               |
+      v               v               v               v
+ App Service      Networking     Observability      Security
+      |               |               |               |
+      v               v               v               v
+ Validation      Validation      Validation      Validation
+      |               |               |               |
+      v               v               v               v
+ Readiness       Readiness       Readiness       Readiness
+      |               |               |               |
+      v               v               v               v
+  What-If         What-If         What-If         What-If
+      |               |               |               |
+      v               v               v               v
+ Approval         Approval         Approval         Approval
+      |               |               |               |
+      v               v               v               v
+Deployment       Deployment      Deployment      Deployment
 ```
 
 The independent paths prevent a deployment constraint affecting one infrastructure area from unnecessarily blocking another.
 
-This is currently demonstrated by the App Service quota constraint: App Service deployment can stop at its readiness stage while networking and observability continue independently through validation, approval and deployment.
+This is currently demonstrated by the App Service quota constraint: App Service deployment can stop at its readiness stage while networking, observability and security continue independently through validation, approval and deployment.
 
 Deployment stages target the Azure DevOps environment:
 
@@ -261,6 +318,7 @@ Each infrastructure path follows a controlled sequence:
 App Service readiness currently validates:
 
 - `Microsoft.Web` resource provider registration
+- target resource group availability
 - quota availability for the configured App Service SKU
 
 Networking readiness currently validates:
@@ -270,7 +328,13 @@ Networking readiness currently validates:
 
 Observability readiness currently validates:
 
-- required observability resource-provider registration
+- `Microsoft.OperationalInsights` resource provider registration
+- `Microsoft.Insights` resource provider registration
+- target resource group availability
+
+Security readiness currently validates:
+
+- `Microsoft.KeyVault` resource provider registration
 - target resource group availability
 
 Readiness checks are intentionally separated from Bicep validation.
@@ -285,7 +349,7 @@ The deployment stages use an Azure Resource Manager service connection configure
 
 ## Resource Provider Strategy
 
-Azure resource-provider registration is treated as a subscription/platform readiness concern rather than being embedded in the resource-group workload templates.
+Azure resource-provider registration is treated as a subscription/platform readiness concern rather than being embedded in resource-group workload templates.
 
 The pipeline verifies required providers before deployment.
 
@@ -301,6 +365,9 @@ Microsoft.Network
 Observability
 Microsoft.OperationalInsights
 Microsoft.Insights
+
+Security
+Microsoft.KeyVault
 ```
 
 This keeps subscription-level platform preparation separate from workload-level Infrastructure as Code.
@@ -321,9 +388,22 @@ The service connection is:
 sc-cloudplatformlab-dev
 ```
 
-The App Service is also defined with a system-assigned managed identity.
+The App Service is defined with a system-assigned managed identity.
 
-The intention is to use managed identity for access to Azure services wherever possible instead of storing credentials in application configuration.
+The intended application authentication model is:
+
+```text
+App Service
+System-assigned Managed Identity
+        |
+        v
+Azure RBAC
+        |
+        v
+Azure Key Vault
+```
+
+This will allow the application to access required platform resources without storing long-lived credentials once the App Service deployment path is operational.
 
 ---
 
@@ -332,6 +412,11 @@ The intention is to use managed identity for access to Azure services wherever p
 Current security controls include:
 
 - Workload Identity Federation
+- Azure Key Vault
+- Azure RBAC Key Vault authorization
+- Key Vault soft delete
+- 90-day Key Vault soft-delete retention
+- Key Vault purge protection
 - Azure RBAC
 - controlled Azure DevOps service connection
 - manual approval before infrastructure deployment
@@ -344,10 +429,10 @@ Current security controls include:
 
 Planned security improvements include:
 
-- Azure Key Vault
-- Azure Policy
+- application-to-Key-Vault access through managed identity
 - Private Endpoints
 - Private DNS
+- Azure Policy
 - Defender for Cloud
 - tighter RBAC where appropriate
 
@@ -431,7 +516,7 @@ The independent deployment architecture allows useful platform work to continue 
 
 ## Target Architecture
 
-The currently deployed networking and observability foundations and the defined App Service workload are the first parts of a broader Azure platform architecture.
+The deployed networking, observability and security foundations and the defined App Service workload form the initial platform baseline.
 
 The longer-term target architecture includes the following areas.
 
@@ -488,6 +573,7 @@ The longer-term target architecture includes the following areas.
 - Azure DevOps
 - Azure Repos
 - GitHub
+- reusable pipeline templates
 - CI/CD
 - automated testing
 
@@ -570,6 +656,24 @@ Workload Identity Federation allows Azure DevOps to authenticate to Azure withou
 
 This reduces secret-management overhead and is closer to the authentication approach intended for a production cloud environment.
 
+### Why Azure RBAC for Key Vault
+
+Key Vault uses the Azure RBAC permission model rather than legacy vault access policies.
+
+This provides a consistent authorization model across Azure resources and allows access to be managed using scoped Azure role assignments.
+
+### Why Soft Delete and Purge Protection
+
+Key Vault can contain security-sensitive configuration that should not be permanently destroyed accidentally.
+
+Soft delete provides a recovery window, while purge protection prevents protected content from being permanently removed before the recovery period expires.
+
+### Why Public Key Vault Access Initially
+
+Public network access remains enabled for the first security foundation so Key Vault deployment, RBAC and recovery controls can be implemented independently from private networking.
+
+Private Endpoint and Private DNS integration will be introduced as a separate networking/security increment.
+
 ### Why Manual Approval
 
 Infrastructure changes can affect availability, security and cost.
@@ -578,11 +682,19 @@ The approval gate creates a deliberate review point between validation and deplo
 
 ### Why Separate Infrastructure Deployment Paths
 
-App Service, networking and observability have different deployment dependencies and readiness requirements.
+App Service, networking, observability and security have different deployment dependencies and readiness requirements.
 
 Keeping them in independent pipeline paths means a constraint affecting one platform area does not unnecessarily block validation or deployment of another.
 
-This is demonstrated by the current App Service quota restriction: the application-platform deployment can stop at its readiness check while networking and observability continue independently.
+This is demonstrated by the current App Service quota restriction: the application-platform deployment can stop at its readiness check while networking, observability and security continue independently.
+
+### Why Modular Pipeline Templates
+
+As additional platform domains were introduced, maintaining every stage in one root YAML pipeline would create unnecessary complexity and duplication.
+
+Reusable stage templates keep each infrastructure domain isolated while preserving a single platform pipeline entry point.
+
+This allows the root pipeline to remain readable while platform-specific validation and deployment logic can evolve independently.
 
 ### Why Separate Application and Private Endpoint Subnets
 
@@ -625,7 +737,8 @@ Implemented and validated:
 - .NET 8 application
 - Products API
 - Azure DevOps CI/CD pipeline
-- independent App Service, networking and observability pipeline paths
+- reusable Azure DevOps YAML stage templates
+- independent App Service, networking, observability and security pipeline paths
 - Bicep infrastructure definitions
 - Bicep validation
 - Bicep What-If
@@ -643,6 +756,11 @@ Implemented and validated:
 - workspace-based Application Insights deployed through Bicep
 - Application Insights linked to Log Analytics
 - 30-day Log Analytics retention
+- Azure Key Vault deployed through Bicep
+- Azure RBAC Key Vault authorization
+- Key Vault soft delete
+- 90-day Key Vault soft-delete retention
+- Key Vault purge protection
 
 Currently provisioned:
 
@@ -663,8 +781,15 @@ rg-cloudplatformlab-dev
 |   30-day retention
 |
 +-- appi-cloudplatformlab-dev
-    Application Insights
-    linked to Log Analytics
+|   Application Insights
+|   linked to Log Analytics
+|
++-- kv-cloudplatformlab-dev
+    Azure Key Vault
+    Azure RBAC
+    Soft delete
+    90-day recovery period
+    Purge protection
 ```
 
 Infrastructure defined but not currently provisioned:
@@ -688,11 +813,12 @@ Planned:
 
 - Azure Monitor alerts
 - Action Groups
-- Key Vault
+- application-to-Key-Vault managed identity access
 - Azure Policy
 - Private Endpoints
 - Private DNS
 - hub-spoke networking
+- Defender for Cloud
 - Terraform
 - landing zone/governance example
 
@@ -715,3 +841,6 @@ Selected implementation evidence is stored in [`docs/evidence`](evidence/).
 | [Application Insights](evidence/09-application-insights-deployed.png) | Workspace-based Application Insights deployed and linked to Log Analytics |
 | [Log Analytics workspace](evidence/10-log-analytics-workspace-deployed.png) | Central Log Analytics workspace successfully provisioned through Bicep |
 | [Log Analytics retention](evidence/11-log-analytics-data-retention.png) | Explicit 30-day telemetry retention configuration for the Dev environment |
+| [Key Vault deployment](evidence/12-key-vault-deployed-azure.png) | Azure Key Vault successfully provisioned in the Dev environment |
+| [Key Vault security controls](evidence/13-key-vault-security-controls.png) | Soft delete, 90-day recovery protection, purge protection and project tagging |
+| [Key Vault RBAC access model](evidence/14-key-vault-rbac-access-model.png) | Azure RBAC selected as the Key Vault permission model |
