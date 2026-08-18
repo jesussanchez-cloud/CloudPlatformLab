@@ -47,6 +47,32 @@ Deployment
 
 The networking, observability and security deployment paths have been successfully executed through Azure DevOps.
 
+The application now also consumes deployed platform services during local development:
+
+```text
+ASP.NET Core Application
+        |
+        +-------------------------------+
+        |                               |
+        v                               v
+DefaultAzureCredential          Application Insights SDK
+        |                               |
+        v                               v
+Microsoft Entra ID             Application Insights
+        |                               |
+        v                               v
+Azure RBAC                    Log Analytics Workspace
+        |
+        v
+Azure Key Vault
+```
+
+The local application authenticates to Azure through `DefaultAzureCredential` and the developer's authenticated Azure identity.
+
+This allows Key Vault integration to be validated without storing application credentials in source control.
+
+Application Insights is also connected to the running application, and real request telemetry has been verified in Azure.
+
 The App Service infrastructure follows an independent deployment path. Its Bicep definition is valid, but provisioning using the currently selected S1 SKU is blocked by the subscription's App Service quota.
 
 Keeping these deployment paths independent allows networking, observability and security infrastructure to be validated and deployed without being blocked by an unrelated application-platform constraint.
@@ -65,12 +91,21 @@ Current application components:
 
 - ASP.NET Core .NET 8
 - Products API
+- Azure Key Vault configuration integration
+- `DefaultAzureCredential` for local Azure authentication
+- Key Vault integration verification endpoint
+- Application Insights SDK integration
+- real Application Insights request telemetry
 - Azure App Service architecture
 - `dev` deployment slot architecture
 
-The App Service infrastructure is currently defined and validated through Bicep but is not provisioned because the subscription currently has no available quota for the selected S1 SKU.
+The application currently validates platform integrations locally against the real Azure Dev resources.
+
+The App Service infrastructure is defined and validated through Bicep but is not provisioned because the subscription currently has no available quota for the selected S1 SKU.
 
 The App Service Plan SKU is parameterised so the architecture is not permanently tied to S1 and can use another appropriate supported SKU in the future.
+
+Local development configuration uses .NET User Secrets where appropriate so environment-specific values are not committed to source control.
 
 ---
 
@@ -178,6 +213,12 @@ The networking infrastructure is independently deployable through the Azure DevO
 The deployed observability foundation provides a central workspace for telemetry and a workspace-based Application Insights resource.
 
 ```text
+ASP.NET Core Application
+          |
+          v
+Application Insights SDK
+          |
+          v
 appi-cloudplatformlab-dev
 Application Insights
           |
@@ -190,19 +231,25 @@ Log Analytics Workspace
   30-day retention
 ```
 
-Application Insights is linked to the Log Analytics workspace so application telemetry can use the workspace as the central observability data store when the application deployment path becomes operational.
+Application Insights is linked to the Log Analytics workspace so application telemetry can use the workspace as the central observability data store.
+
+The ASP.NET Core application is now configured with the Application Insights SDK and has successfully sent real request telemetry to the deployed Application Insights resource.
+
+Verified telemetry includes requests to the Key Vault integration endpoint, providing evidence that the running application is actively using the observability platform rather than Application Insights existing only as deployed infrastructure.
+
+The Application Insights connection string is supplied through local environment configuration using .NET User Secrets rather than being stored in source control.
+
+Application Insights registration is conditional so an environment without telemetry configuration can still run the application.
 
 The Log Analytics workspace currently uses 30-day retention. This provides sufficient retention for a development environment while limiting unnecessary long-term data retention and associated cost.
 
-The current observability foundation has been successfully deployed through Bicep and the controlled Azure DevOps pipeline.
-
-Application telemetry integration, Azure Monitor alerts, Action Groups, health monitoring and additional operational controls will be added as workloads requiring those capabilities become available.
+Azure Monitor alerts, Action Groups and additional health/operational monitoring will be added as the platform develops.
 
 ---
 
 ## Security Architecture
 
-The Dev environment now includes a Key Vault security foundation deployed through Bicep and the controlled Azure DevOps pipeline.
+The Dev environment includes a Key Vault security foundation deployed through Bicep and the controlled Azure DevOps pipeline.
 
 ```text
 kv-cloudplatformlab-dev
@@ -226,9 +273,89 @@ Public network access remains enabled at this stage deliberately.
 
 Private network access will be introduced later through Private Endpoints and Private DNS as part of the private-connectivity phase rather than mixing network architecture changes into the initial Key Vault security foundation.
 
-The App Service definition already includes a system-assigned managed identity. Once the application platform can be deployed, that managed identity can be granted an appropriate Key Vault data-plane role so the application can access secrets without storing credentials.
+### Application-to-Key-Vault Integration
 
-No application secrets are committed to the repository.
+The ASP.NET Core application now consumes configuration from the deployed Key Vault.
+
+During local development, the application uses:
+
+```text
+ASP.NET Core Application
+          |
+          v
+DefaultAzureCredential
+          |
+          v
+Microsoft Entra ID
+          |
+          v
+Azure RBAC
+          |
+          v
+kv-cloudplatformlab-dev
+```
+
+`DefaultAzureCredential` resolves the developer's authenticated Azure identity locally.
+
+Microsoft Entra ID authenticates that identity and Azure RBAC authorizes access to Key Vault.
+
+A test configuration value has been successfully loaded from Key Vault into .NET configuration.
+
+The `/health/keyvault` endpoint verifies that the value was loaded without returning or logging the secret itself.
+
+This provides a working identity and Key Vault integration before App Service is available.
+
+Once App Service can be provisioned, the application authentication path is intended to become:
+
+```text
+App Service
+System-Assigned Managed Identity
+          |
+          v
+Microsoft Entra ID
+          |
+          v
+Azure RBAC
+          |
+          v
+Azure Key Vault
+```
+
+The application code can therefore move from a developer identity locally to a workload identity in Azure without introducing an application-managed client secret.
+
+No application secret values or Azure connection strings are committed to the repository.
+
+---
+
+## Application Integration Architecture
+
+The current runtime integration now connects the application to two deployed Azure platform services.
+
+```text
+                         ASP.NET Core Application
+                                  |
+                  +---------------+---------------+
+                  |                               |
+                  v                               v
+        DefaultAzureCredential          Application Insights SDK
+                  |                               |
+                  v                               v
+        Microsoft Entra ID               Application Insights
+                  |                               |
+                  v                               v
+             Azure RBAC                 Log Analytics Workspace
+                  |
+                  v
+             Azure Key Vault
+```
+
+This is an important architectural transition for the project.
+
+The networking, observability and security resources are no longer only independent Azure infrastructure components. The workload now actively consumes the identity/security and observability capabilities provided by the platform.
+
+The current integration is tested locally because App Service provisioning remains blocked by subscription quota.
+
+When App Service becomes deployable, the developer identity used by `DefaultAzureCredential` locally can be replaced by the App Service system-assigned managed identity while preserving the same application authentication model.
 
 ---
 
@@ -388,22 +515,48 @@ The service connection is:
 sc-cloudplatformlab-dev
 ```
 
-The App Service is defined with a system-assigned managed identity.
+The application currently uses two Azure identity contexts depending on where code is running.
 
-The intended application authentication model is:
+During local development:
 
 ```text
-App Service
-System-assigned Managed Identity
-        |
-        v
+Local Application
+      |
+      v
+DefaultAzureCredential
+      |
+      v
+Authenticated Developer Identity
+      |
+      v
+Microsoft Entra ID
+      |
+      v
 Azure RBAC
-        |
-        v
+      |
+      v
 Azure Key Vault
 ```
 
-This will allow the application to access required platform resources without storing long-lived credentials once the App Service deployment path is operational.
+For the future Azure-hosted workload:
+
+```text
+App Service
+      |
+      v
+System-Assigned Managed Identity
+      |
+      v
+Microsoft Entra ID
+      |
+      v
+Azure RBAC
+      |
+      v
+Azure Key Vault
+```
+
+This allows the same application design to use environment-appropriate identities without embedding Azure credentials in application configuration.
 
 ---
 
@@ -417,6 +570,11 @@ Current security controls include:
 - Key Vault soft delete
 - 90-day Key Vault soft-delete retention
 - Key Vault purge protection
+- application-to-Key-Vault configuration integration
+- `DefaultAzureCredential`
+- developer identity authentication through Microsoft Entra ID
+- Azure RBAC authorization for Key Vault access
+- Key Vault integration verification without exposing secret values
 - Azure RBAC
 - controlled Azure DevOps service connection
 - manual approval before infrastructure deployment
@@ -426,10 +584,11 @@ Current security controls include:
 - HTTPS-only App Service configuration
 - TLS 1.2 minimum App Service configuration
 - separate subnet reserved for future Private Endpoints
+- environment-specific values kept out of source control
 
 Planned security improvements include:
 
-- application-to-Key-Vault access through managed identity
+- App Service-to-Key-Vault access through system-assigned managed identity
 - Private Endpoints
 - Private DNS
 - Azure Policy
@@ -437,8 +596,6 @@ Planned security improvements include:
 - tighter RBAC where appropriate
 
 Secrets and credentials are not intended to be stored in source control.
-
----
 
 ## Resource Organisation
 
@@ -504,19 +661,19 @@ Remove paid resources when appropriate
 
 The Log Analytics workspace uses a 30-day retention period to provide a useful observability foundation without retaining development telemetry unnecessarily.
 
-As telemetry sources are connected, ingestion volume and retention will be reviewed as part of the platform's cost controls.
+The application is now generating real telemetry, allowing ingestion volume and retention to be reviewed against actual application activity as part of the platform's cost controls.
 
 Because the environment is defined as code, resources can be removed and recreated later.
 
 This also helps test whether the infrastructure is genuinely reproducible.
 
-The independent deployment architecture allows useful platform work to continue without bypassing the App Service quota constraint.
+The independent deployment architecture allows useful platform and application-integration work to continue without bypassing the App Service quota constraint.
 
 ---
 
 ## Target Architecture
 
-The deployed networking, observability and security foundations and the defined App Service workload form the initial platform baseline.
+The deployed networking, observability and security foundations, together with the application integrations and defined App Service workload, form the initial platform baseline.
 
 The longer-term target architecture includes the following areas.
 
@@ -656,6 +813,14 @@ Workload Identity Federation allows Azure DevOps to authenticate to Azure withou
 
 This reduces secret-management overhead and is closer to the authentication approach intended for a production cloud environment.
 
+### Why DefaultAzureCredential
+
+`DefaultAzureCredential` provides an environment-aware authentication model for the application.
+
+During local development, it can use the developer's authenticated Azure identity. When the application runs in Azure, the same application design can use a managed identity instead.
+
+This allows authentication to change with the execution environment without introducing application-managed credentials.
+
 ### Why Azure RBAC for Key Vault
 
 Key Vault uses the Azure RBAC permission model rather than legacy vault access policies.
@@ -670,9 +835,27 @@ Soft delete provides a recovery window, while purge protection prevents protecte
 
 ### Why Public Key Vault Access Initially
 
-Public network access remains enabled for the first security foundation so Key Vault deployment, RBAC and recovery controls can be implemented independently from private networking.
+Public network access remains enabled for the first security foundation so Key Vault deployment, RBAC and application integration can be implemented independently from private networking.
 
 Private Endpoint and Private DNS integration will be introduced as a separate networking/security increment.
+
+This keeps identity, authorization and networking concerns independently testable while the platform is developed incrementally.
+
+### Why Application Insights SDK Integration
+
+Deploying Application Insights alone does not demonstrate application observability.
+
+Integrating the Application Insights SDK into the ASP.NET Core application allows real request telemetry to be generated and sent to the deployed observability platform.
+
+This validates the path from the running workload through Application Insights to the Log Analytics workspace and provides a foundation for later alerts, investigation and operational monitoring.
+
+### Why Local Integration Before App Service Deployment
+
+The App Service infrastructure is currently blocked by a subscription-level quota constraint rather than an application or IaC problem.
+
+Key Vault and Application Insights are already available, so application-to-platform integrations are validated locally against those real Azure services instead of delaying unrelated engineering work.
+
+This separates application integration from the App Service capacity constraint and allows the eventual hosted workload to reuse the validated integration patterns.
 
 ### Why Manual Approval
 
@@ -706,7 +889,9 @@ Using separate subnets provides a clearer boundary between application connectiv
 
 Application Insights is linked to a Log Analytics workspace so application telemetry can use a central observability data store.
 
-This provides a foundation for later KQL queries, alerts, operational investigation and correlation as application and platform telemetry are introduced.
+The application is now actively sending telemetry through this architecture rather than the observability resources existing only as infrastructure.
+
+This provides a foundation for KQL queries, alerts, operational investigation and correlation as additional application and platform telemetry is introduced.
 
 ### Why 30-Day Log Retention
 
@@ -761,6 +946,14 @@ Implemented and validated:
 - Key Vault soft delete
 - 90-day Key Vault soft-delete retention
 - Key Vault purge protection
+- `DefaultAzureCredential` application authentication
+- application-to-Key-Vault configuration integration
+- Key Vault access through Microsoft Entra ID and Azure RBAC
+- Key Vault verification endpoint without exposing secret values
+- Application Insights SDK integrated with the ASP.NET Core application
+- real application telemetry received by Application Insights
+- individual application requests verified in Application Insights
+- local environment-specific configuration kept outside source control using .NET User Secrets
 
 Currently provisioned:
 
@@ -783,6 +976,7 @@ rg-cloudplatformlab-dev
 +-- appi-cloudplatformlab-dev
 |   Application Insights
 |   linked to Log Analytics
+|   receiving application telemetry
 |
 +-- kv-cloudplatformlab-dev
     Azure Key Vault
@@ -790,6 +984,7 @@ rg-cloudplatformlab-dev
     Soft delete
     90-day recovery period
     Purge protection
+    consumed by local application
 ```
 
 Infrastructure defined but not currently provisioned:
@@ -802,18 +997,20 @@ The App Service infrastructure has been validated through Bicep, but provisionin
 
 The App Service SKU is parameterised so the deployment architecture is not permanently tied to S1.
 
+The App Service quota constraint does not prevent application integration work from continuing. The application currently consumes the real Dev Key Vault and Application Insights resources while running locally.
+
 In progress:
 
 - automated application tests
 - application deployment once suitable App Service capacity is available
-- application telemetry integration
-- health checks
+- health monitoring
+- Azure Monitor alerting
 
 Planned:
 
+- App Service-to-Key-Vault authentication through system-assigned managed identity
 - Azure Monitor alerts
 - Action Groups
-- application-to-Key-Vault managed identity access
 - Azure Policy
 - Private Endpoints
 - Private DNS
@@ -844,3 +1041,6 @@ Selected implementation evidence is stored in [`docs/evidence`](evidence/).
 | [Key Vault deployment](evidence/12-key-vault-deployed-azure.png) | Azure Key Vault successfully provisioned in the Dev environment |
 | [Key Vault security controls](evidence/13-key-vault-security-controls.png) | Soft delete, 90-day recovery protection, purge protection and project tagging |
 | [Key Vault RBAC access model](evidence/14-key-vault-rbac-access-model.png) | Azure RBAC selected as the Key Vault permission model |
+| [Key Vault application integration](evidence/15-key-vault-application-integration.png) | ASP.NET Core application successfully loading Key Vault configuration through Azure identity and RBAC without exposing the secret value |
+| [Application Insights live telemetry](evidence/16-application-insights-live-telemetry.png) | Real telemetry from the running ASP.NET Core application received by the deployed Application Insights resource |
+| [Application Insights request telemetry](evidence/17-application-insights-request-telemetry.png) | Individual application requests, including the Key Vault integration endpoint, captured and correlated in Application Insights |

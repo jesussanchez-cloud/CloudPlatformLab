@@ -2,7 +2,7 @@
 
 CloudPlatformLab is a production-oriented Azure platform engineering project demonstrating infrastructure as code, CI/CD, identity, security, networking, governance, observability and cost-aware cloud operations.
 
-The application workload is intentionally simple. The engineering focus is the platform around it: reproducible infrastructure, secretless authentication, controlled deployments, environment validation and operational safeguards.
+The application workload is intentionally simple. The engineering focus is the platform around it: reproducible infrastructure, secretless authentication, controlled deployments, environment validation, application-to-platform integration and operational safeguards.
 
 The platform is being developed incrementally, with implemented capabilities separated from the target architecture so that architectural decisions, deployment controls and operational behaviour can be validated and documented as the platform evolves.
 
@@ -49,13 +49,37 @@ The platform is built as independently deployable infrastructure areas, with inf
 
 The networking, observability and security foundations have been successfully deployed through their controlled pipeline paths.
 
+The application is now also integrated with deployed platform services during local development:
+
+```text
+ASP.NET Core Application
+        |
+        +-------------------------------+
+        |                               |
+        v                               v
+DefaultAzureCredential          Application Insights SDK
+        |                               |
+        v                               v
+Microsoft Entra ID             Application Insights
+        |                               |
+        v                               v
+Azure RBAC                    Log Analytics Workspace
+        |
+        v
+Azure Key Vault
+```
+
+The local application authenticates to Azure through `DefaultAzureCredential` and the developer's Azure identity, allowing Key Vault integration to be validated without storing credentials in source control.
+
+Application Insights is also connected to the running application, and real request telemetry has been verified in Azure.
+
 The App Service infrastructure follows an independent deployment path. It is defined and validated through Bicep, but provisioning is currently blocked by a subscription-level App Service quota constraint.
 
 Keeping the infrastructure paths independent allows one platform constraint to fail safely without unnecessarily preventing unrelated infrastructure from being validated or deployed.
 
 The Azure DevOps pipeline has also been modularised into reusable YAML stage templates so that each infrastructure domain can evolve independently without turning the root pipeline into a large monolithic definition.
 
-> **App Service deployment status:** The App Service infrastructure is defined in Bicep and validated independently. Final provisioning using the currently selected S1 SKU is blocked by an App Service quota of `0`. See [Deployment Validation and Evidence](#deployment-validation-and-evidence).
+> **App Service deployment status:** The App Service infrastructure is defined in Bicep and validated independently. Final provisioning using the currently selected S1 SKU is blocked by an App Service quota of `0`. Application-to-platform integrations are therefore being validated locally first, using the same Azure services that will later support the deployed workload.
 
 ---
 
@@ -146,10 +170,19 @@ Currently implemented:
 
 - ASP.NET Core .NET 8 application
 - Products API
+- Azure Key Vault configuration integration
+- `DefaultAzureCredential` authentication for local Azure access
+- Key Vault integration verification endpoint
+- Application Insights SDK integration
+- real application request telemetry sent to Azure
 - App Service infrastructure defined in Bicep
 - `dev` deployment slot defined in Bicep
 - system-assigned managed identity defined in Bicep
 - App Service infrastructure validated through Bicep
+
+The application currently validates platform integrations locally while App Service provisioning remains unavailable because of the subscription quota constraint.
+
+Local development configuration uses .NET User Secrets where appropriate so Azure configuration values are not committed to source control.
 
 ---
 
@@ -252,22 +285,36 @@ The current observability infrastructure consists of:
 - `log-cloudplatformlab-dev` — Log Analytics workspace
 - `appi-cloudplatformlab-dev` — workspace-based Application Insights
 - 30-day Log Analytics data retention
+- ASP.NET Core Application Insights SDK integration
+- verified application request telemetry
 
-Application Insights is linked to the Log Analytics workspace so application telemetry can use the workspace as the central observability data store as the application deployment path develops.
+Application Insights is linked to the Log Analytics workspace, providing a central observability data store for application telemetry.
 
 ```text
-Application Insights
-appi-cloudplatformlab-dev
+ASP.NET Core Application
           |
           v
-Log Analytics Workspace
+Application Insights SDK
+          |
+          v
+appi-cloudplatformlab-dev
+Application Insights
+          |
+          v
 log-cloudplatformlab-dev
+Log Analytics Workspace
           |
           v
    30-day retention
 ```
 
-Observability follows its own controlled deployment path:
+The application has been configured to send telemetry to the deployed Application Insights resource.
+
+Real request telemetry has been verified in Azure, including requests to the Key Vault integration verification endpoint.
+
+The Application Insights connection string is supplied through local development configuration rather than being committed to source control. Application Insights registration is conditional so environments without telemetry configuration can still run the application.
+
+Observability infrastructure follows its own controlled deployment path:
 
 ```text
 Observability Bicep
@@ -290,15 +337,15 @@ Observability Deployment
 
 The readiness stage validates the required Azure resource providers and target resource group before the deployment path continues.
 
-The observability foundation has been successfully provisioned through this process.
+The observability foundation and initial application telemetry integration have now both been successfully validated.
 
-Application telemetry integration, alerts, Action Groups, health monitoring and additional operational controls will be introduced as workloads requiring those capabilities are deployed.
+Azure Monitor alerts, Action Groups, health monitoring and additional operational controls will be introduced as the platform develops.
 
 ---
 
 ## Identity & Security
 
-The Dev environment now includes a security foundation deployed through Bicep and its own controlled Azure DevOps pipeline path.
+The Dev environment includes a security foundation deployed through Bicep and its own controlled Azure DevOps pipeline path.
 
 The current security infrastructure includes:
 
@@ -341,7 +388,53 @@ The security readiness stage verifies that the `Microsoft.KeyVault` resource pro
 
 Azure DevOps authenticates to Azure using Workload Identity Federation, avoiding a long-lived client secret in the repository or pipeline configuration.
 
-The App Service definition also includes a system-assigned managed identity. When the application deployment path becomes operational, managed identity will be used where supported for application-to-platform authentication rather than storing application credentials.
+### Application-to-Key-Vault Integration
+
+The ASP.NET Core application is now integrated with the deployed Key Vault.
+
+During local development, the application uses `DefaultAzureCredential`, which resolves the authenticated developer identity and uses Microsoft Entra ID and Azure RBAC to access Key Vault.
+
+```text
+ASP.NET Core Application
+          |
+          v
+DefaultAzureCredential
+          |
+          v
+Microsoft Entra ID
+          |
+          v
+Azure RBAC
+          |
+          v
+kv-cloudplatformlab-dev
+```
+
+A test secret is successfully loaded into .NET configuration from Key Vault.
+
+The `/health/keyvault` verification endpoint confirms that the configuration value was loaded without returning or logging the secret itself.
+
+This provides a working application-to-platform integration while the App Service deployment path remains quota constrained.
+
+When App Service becomes operational, the intended authentication path is:
+
+```text
+App Service
+     |
+     v
+System-Assigned Managed Identity
+     |
+     v
+Microsoft Entra ID
+     |
+     v
+Azure RBAC
+     |
+     v
+Azure Key Vault
+```
+
+This allows the application code to move from a developer identity during local development to a workload identity in Azure without introducing application credentials.
 
 Security controls currently implemented or represented in the platform include:
 
@@ -350,6 +443,8 @@ Security controls currently implemented or represented in the platform include:
 - Azure RBAC Key Vault authorization
 - Key Vault soft delete
 - Key Vault purge protection
+- application Key Vault integration
+- `DefaultAzureCredential`
 - system-assigned Managed Identity defined for App Service
 - HTTPS-only App Service configuration
 - TLS 1.2 minimum
@@ -357,10 +452,9 @@ Security controls currently implemented or represented in the platform include:
 - controlled Azure DevOps service connection
 - manual infrastructure deployment approval
 - infrastructure readiness validation
+- secrets excluded from source control
 
-Secrets and credentials are not stored in the repository.
-
-Key Vault private connectivity, application access through managed identity, Azure Policy and additional security controls will be introduced as the dependent platform capabilities are implemented.
+Key Vault private connectivity, Azure Policy and additional security controls will be introduced as the dependent platform capabilities are implemented.
 
 ---
 
@@ -463,6 +557,8 @@ The App Service SKU is parameterised so the infrastructure architecture is not p
 
 The independent pipeline architecture means this constraint does not prevent networking, observability or security infrastructure from being validated and deployed.
 
+Application integrations are being validated locally against the deployed Azure platform services while this constraint remains in place.
+
 ### Successfully deployed infrastructure
 
 The networking deployment path has successfully provisioned:
@@ -486,9 +582,16 @@ The security deployment path has successfully provisioned:
 - 90-day soft-delete retention
 - purge protection
 
+Application-level validation has additionally demonstrated:
+
+- authenticated Key Vault access from the ASP.NET Core application
+- Key Vault configuration loading without exposing secret values
+- real ASP.NET Core request telemetry reaching Application Insights
+- individual application requests visible in Azure telemetry
+
 ### Evidence
 
-Pipeline and IaC evidence is available in [`docs/evidence`](docs/evidence/):
+Pipeline, IaC and runtime integration evidence is available in [`docs/evidence`](docs/evidence/):
 
 - [Pre-deployment quota gate](docs/evidence/01-pre-deployment-validation-quota-gate.png)
 - [Bicep Infrastructure as Code What-If](docs/evidence/02-infrastructure-as-code-bicep-what-if.png)
@@ -504,6 +607,9 @@ Pipeline and IaC evidence is available in [`docs/evidence`](docs/evidence/):
 - [Key Vault deployed in Azure](docs/evidence/12-key-vault-deployed-azure.png)
 - [Key Vault security controls](docs/evidence/13-key-vault-security-controls.png)
 - [Key Vault RBAC access model](docs/evidence/14-key-vault-rbac-access-model.png)
+- [Key Vault application integration](docs/evidence/15-key-vault-application-integration.png)
+- [Application Insights live telemetry](docs/evidence/16-application-insights-live-telemetry.png)
+- [Application Insights request telemetry](docs/evidence/17-application-insights-request-telemetry.png)
 
 Additional architectural decisions and implementation details are documented in [`docs/architecture.md`](docs/architecture.md).
 
@@ -550,7 +656,7 @@ Before deploying paid infrastructure:
 
 The Log Analytics workspace currently uses a 30-day retention period to provide an observability foundation while keeping data retention appropriate for a development environment.
 
-As telemetry sources are introduced, ingestion volume and retention will be reviewed as part of the platform's cost controls.
+Application telemetry is now being generated, so ingestion volume and retention can be reviewed against actual workload telemetry as part of the platform's cost controls.
 
 Because the environment is defined as code, resources can be destroyed when they are not needed and recreated later from Bicep.
 
@@ -582,7 +688,7 @@ Build and Infrastructure Validation
 Controlled Dev Deployment
 ```
 
-Infrastructure, pipeline and documentation changes normally go through feature branches and pull requests rather than being changed directly on `Dev`.
+Infrastructure, pipeline, application integration and documentation changes normally go through feature branches and pull requests rather than being changed directly on `Dev`.
 
 Feature-branch pipeline runs are used to validate infrastructure and pipeline behaviour before changes are merged. Dev environment deployments are performed from the merged `Dev` branch.
 
@@ -662,6 +768,10 @@ The intended promotion path validates application changes in the `dev` slot befo
 
 Deployment slot swapping and rollback can then provide controlled promotion and recovery once the application deployment path is operational.
 
+While App Service provisioning remains quota constrained, application integration with Key Vault and Application Insights is validated locally against the real deployed Azure services.
+
+This allows application-to-platform behaviour to be developed and evidenced independently of the App Service capacity constraint.
+
 ---
 
 ## Landing Zone and Governance
@@ -715,17 +825,24 @@ The intention is not to maintain two identical implementations of every resource
 
 ## Current Work
 
-The networking, observability and security foundations are now deployed and independently managed through reusable Azure DevOps pipeline templates.
+The networking, observability and security foundations are deployed and independently managed through reusable Azure DevOps pipeline templates.
 
-The next phase will extend the platform into governance and private-connectivity capabilities while continuing to build operational maturity.
+The application now consumes the security and observability foundations rather than those services existing only as isolated infrastructure:
+
+- Key Vault configuration retrieval has been validated from the ASP.NET Core application.
+- Application Insights is receiving real application request telemetry.
+- Application-to-Azure authentication is being validated locally through `DefaultAzureCredential`.
+- The future App Service workload identity path is already represented through the system-assigned managed identity defined in Bicep.
+
+The next phase will extend the platform into governance, operational controls and private-connectivity capabilities while continuing to build application and platform maturity.
 
 Current priorities are:
 
 - introduce Azure Policy and governance controls
 - add automated application tests
-- integrate application telemetry with Application Insights when the application deployment path is operational
 - introduce Azure Monitor alerts and Action Groups
-- connect application workloads to Key Vault through managed identity when the application platform is available
+- add application health monitoring
+- transition Key Vault authentication to App Service managed identity when the application platform becomes deployable
 - introduce Private Endpoints and Private DNS for appropriate platform services
 - introduce Terraform for selected infrastructure
 - develop the landing zone and governance model
@@ -747,6 +864,7 @@ The architecture and documentation will continue to evolve alongside implemented
 - Reusable Azure Pipelines YAML templates
 - Workload Identity Federation
 - Managed Identity
+- DefaultAzureCredential
 - Azure Key Vault
 - Azure RBAC
 - Bicep
@@ -754,11 +872,13 @@ The architecture and documentation will continue to evolve alongside implemented
 - Azure CLI
 - ASP.NET Core
 - .NET 8
+- .NET User Secrets
 - Git
 - GitHub
 - Azure Virtual Network
 - Azure Subnets
 - Application Insights
+- Application Insights SDK
 - Log Analytics
 
 ### Defined / In Progress
