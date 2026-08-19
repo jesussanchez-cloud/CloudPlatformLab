@@ -1,0 +1,172 @@
+parameters:
+- name: dependsOn
+  type: string
+
+- name: resourceGroupName
+  type: string
+
+- name: serviceConnection
+  type: string
+
+- name: devEnvironment
+  type: string
+
+- name: location
+  type: string
+
+
+stages:
+
+# =========================================================
+# GOVERNANCE - VALIDATE
+# =========================================================
+
+- stage: ValidateGovernance
+  displayName: 'Validate Governance'
+  dependsOn: ${{ parameters.dependsOn }}
+  condition: succeeded()
+
+  jobs:
+
+  - job: ValidateGovernance
+    displayName: 'Validate Governance Bicep'
+
+    steps:
+
+    - task: AzureCLI@2
+      displayName: 'Validate Governance Bicep'
+      inputs:
+        azureSubscription: ${{ parameters.serviceConnection }}
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          set -euo pipefail
+
+          az bicep build \
+            --file infra/governance/main.bicep \
+            --stdout > /dev/null
+
+          echo "Governance Bicep validation passed."
+
+
+# =========================================================
+# GOVERNANCE - READINESS
+# =========================================================
+
+- stage: GovernanceReadiness
+  displayName: 'Governance Readiness'
+  dependsOn: ValidateGovernance
+  condition: succeeded()
+
+  jobs:
+
+  - job: GovernanceReadiness
+    displayName: 'Check Governance Deployment Readiness'
+
+    steps:
+
+    - task: AzureCLI@2
+      displayName: 'Governance Readiness Checks'
+      inputs:
+        azureSubscription: ${{ parameters.serviceConnection }}
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          set -euo pipefail
+
+          echo "Checking Microsoft.Authorization registration..."
+
+          authorizationState=$(az provider show \
+            --namespace Microsoft.Authorization \
+            --query registrationState \
+            --output tsv)
+
+          echo "Microsoft.Authorization registration state: $authorizationState"
+
+          if [ "$authorizationState" != "Registered" ]; then
+            echo "##vso[task.logissue type=error]Microsoft.Authorization is not registered."
+            exit 1
+          fi
+
+          echo "Checking target resource group..."
+
+          resourceGroupExists=$(az group exists \
+            --name ${{ parameters.resourceGroupName }})
+
+          echo "Resource group exists: $resourceGroupExists"
+
+          if [ "$resourceGroupExists" != "true" ]; then
+            echo "##vso[task.logissue type=error]Resource group ${{ parameters.resourceGroupName }} does not exist."
+            exit 1
+          fi
+
+          echo "Governance readiness checks passed."
+
+
+# =========================================================
+# GOVERNANCE - WHAT-IF
+# =========================================================
+
+- stage: GovernanceWhatIf
+  displayName: 'Governance What-If'
+  dependsOn: GovernanceReadiness
+  condition: succeeded()
+
+  jobs:
+
+  - job: GovernanceWhatIf
+    displayName: 'Preview Governance Changes'
+
+    steps:
+
+    - task: AzureCLI@2
+      displayName: 'Governance What-If'
+      inputs:
+        azureSubscription: ${{ parameters.serviceConnection }}
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          set -euo pipefail
+
+          az deployment sub what-if \
+            --location ${{ parameters.location }} \
+            --template-file infra/governance/main.bicep \
+            --parameters resourceGroupName=${{ parameters.resourceGroupName }}
+
+
+# =========================================================
+# GOVERNANCE - DEPLOY
+# =========================================================
+
+- stage: DeployGovernance
+  displayName: 'Deploy Governance'
+  dependsOn: GovernanceWhatIf
+  condition: succeeded()
+
+  jobs:
+
+  - deployment: DeployGovernance
+    displayName: 'Deploy Governance to Dev'
+    environment: ${{ parameters.devEnvironment }}
+
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+
+          - checkout: self
+
+          - task: AzureCLI@2
+            displayName: 'Deploy Governance Bicep'
+            inputs:
+              azureSubscription: ${{ parameters.serviceConnection }}
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                set -euo pipefail
+
+                az deployment sub create \
+                  --location ${{ parameters.location }} \
+                  --template-file infra/governance/main.bicep \
+                  --parameters resourceGroupName=${{ parameters.resourceGroupName }} \
+                  --name cloudplatformlab-governance-dev
