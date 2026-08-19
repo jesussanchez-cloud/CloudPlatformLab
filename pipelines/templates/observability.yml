@@ -139,9 +139,25 @@ stages:
         inlineScript: |
           set -euo pipefail
 
+          echo "Retrieving alert email from Key Vault..."
+
+          alertEmail=$(az keyvault secret show \
+            --vault-name kv-cloudplatformlab-dev \
+            --name AlertEmail \
+            --query value \
+            --output tsv)
+
+          if [ -z "$alertEmail" ]; then
+            echo "##vso[task.logissue type=error]AlertEmail could not be retrieved from Key Vault."
+            exit 1
+          fi
+
+          echo "Alert email retrieved successfully."
+
           az deployment group what-if \
             --resource-group ${{ parameters.resourceGroupName }} \
-            --template-file infra/observability/main.bicep
+            --template-file infra/observability/main.bicep \
+            --parameters alertEmail="$alertEmail"
 
 
 # =========================================================
@@ -175,7 +191,23 @@ stages:
               inlineScript: |
                 set -euo pipefail
 
+                echo "Retrieving alert email from Key Vault..."
+
+                alertEmail=$(az keyvault secret show \
+                  --vault-name kv-cloudplatformlab-dev \
+                  --name AlertEmail \
+                  --query value \
+                  --output tsv)
+
+                if [ -z "$alertEmail" ]; then
+                  echo "##vso[task.logissue type=error]AlertEmail could not be retrieved from Key Vault."
+                  exit 1
+                fi
+
+                echo "Alert email retrieved successfully."
+
                 az deployment group create \
                   --resource-group ${{ parameters.resourceGroupName }} \
                   --template-file infra/observability/main.bicep \
+                  --parameters alertEmail="$alertEmail" \
                   --name cloudplatformlab-observability-dev
