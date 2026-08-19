@@ -60,18 +60,27 @@ DefaultAzureCredential          Application Insights SDK
         v                               v
 Microsoft Entra ID             Application Insights
         |                               |
-        v                               v
-Azure RBAC                    Log Analytics Workspace
-        |
-        v
-Azure Key Vault
+        v                               +--------------------+
+Azure RBAC                     |                    |
+        |                      v                    v
+        v              Log Analytics       Azure Monitor Alert
+Azure Key Vault                                     |
+                                                    v
+                                             Action Group
+                                                    |
+                                                    v
+                                             Email Notification
 ```
 
 The local application authenticates to Azure through `DefaultAzureCredential` and the developer's authenticated Azure identity.
 
 This allows Key Vault integration to be validated without storing application credentials in source control.
 
-Application Insights is also connected to the running application, and real request telemetry has been verified in Azure.
+Application Insights is connected to the running application, and real request telemetry has been verified in Azure.
+
+Azure Monitor alerting has also been implemented. Failed application requests are evaluated by a metric alert scoped to Application Insights. When the configured threshold is exceeded, an Azure Monitor Action Group sends an email notification.
+
+This monitoring path has been tested end-to-end by deliberately generating failed application requests and confirming that the Azure Monitor alert fired and the Action Group delivered the notification.
 
 The App Service infrastructure follows an independent deployment path. Its Bicep definition is valid, but provisioning using the currently selected S1 SKU is blocked by the subscription's App Service quota.
 
@@ -96,6 +105,7 @@ Current application components:
 - Key Vault integration verification endpoint
 - Application Insights SDK integration
 - real Application Insights request telemetry
+- failed-request telemetry used by Azure Monitor alerting
 - Azure App Service architecture
 - `dev` deployment slot architecture
 
@@ -152,6 +162,8 @@ The observability template defines:
 - Log Analytics workspace
 - workspace-based Application Insights
 - 30-day Log Analytics retention
+- Azure Monitor Action Group
+- failed-request metric alert
 - common resource tags
 
 The security template defines:
@@ -210,7 +222,7 @@ The networking infrastructure is independently deployable through the Azure DevO
 
 ## Observability Architecture
 
-The deployed observability foundation provides a central workspace for telemetry and a workspace-based Application Insights resource.
+The deployed observability foundation now provides application telemetry, centralized log storage, metric-based failure detection and automated notification.
 
 ```text
 ASP.NET Core Application
@@ -222,18 +234,25 @@ Application Insights SDK
 appi-cloudplatformlab-dev
 Application Insights
           |
-          | WorkspaceResourceId
-          v
-log-cloudplatformlab-dev
-Log Analytics Workspace
-          |
-          v
-  30-day retention
+          +----------------------------+
+          |                            |
+          v                            v
+log-cloudplatformlab-dev      Failed Request Metric
+Log Analytics Workspace                |
+          |                             v
+          v                    Azure Monitor Alert
+  30-day retention             alert-failed-requests-dev
+                                        |
+                                        v
+                                  Action Group
+                                        |
+                                        v
+                                Email Notification
 ```
 
-Application Insights is linked to the Log Analytics workspace so application telemetry can use the workspace as the central observability data store.
+Application Insights is linked to the Log Analytics workspace so application telemetry uses the workspace as the central observability data store.
 
-The ASP.NET Core application is now configured with the Application Insights SDK and has successfully sent real request telemetry to the deployed Application Insights resource.
+The ASP.NET Core application is configured with the Application Insights SDK and has successfully sent real request telemetry to the deployed Application Insights resource.
 
 Verified telemetry includes requests to the Key Vault integration endpoint, providing evidence that the running application is actively using the observability platform rather than Application Insights existing only as deployed infrastructure.
 
@@ -241,9 +260,75 @@ The Application Insights connection string is supplied through local environment
 
 Application Insights registration is conditional so an environment without telemetry configuration can still run the application.
 
+### Azure Monitor Alerting
+
+The observability platform now includes an Azure Monitor metric alert monitoring failed Application Insights requests.
+
+The implemented monitoring flow is:
+
+```text
+Application Request
+       |
+       v
+Application Insights
+       |
+       v
+requests/failed metric
+       |
+       v
+Azure Monitor Metric Alert
+alert-failed-requests-dev
+       |
+       v
+Azure Monitor Action Group
+       |
+       v
+Email Notification
+```
+
+The failed-request alert is configured through Bicep and deployed through the same controlled observability pipeline as the rest of the monitoring infrastructure.
+
+The alert uses the Application Insights failed-request metric and fires when failed requests exceed the configured threshold.
+
+The Action Group email receiver is not hardcoded in the repository.
+
+Instead, the notification email address is stored as the `AlertEmail` secret in Azure Key Vault.
+
+During the observability What-If and deployment operations, the Azure DevOps service connection retrieves `AlertEmail` from Key Vault and supplies it to the Bicep deployment as a secure parameter.
+
+```text
+Azure Key Vault
+kv-cloudplatformlab-dev
+       |
+       | AlertEmail
+       v
+Azure DevOps Service Connection Identity
+       |
+       | Key Vault Secrets User
+       v
+Observability Pipeline
+       |
+       | secure deployment parameter
+       v
+Observability Bicep
+       |
+       v
+Azure Monitor Action Group
+```
+
+The pipeline identity is granted the `Key Vault Secrets User` role required to retrieve the secret value.
+
+The pipeline does not print the retrieved email address to its logs.
+
+This separates sensitive environment-specific notification configuration from the IaC definition while keeping the Action Group itself reproducibly deployed through Bicep.
+
+The monitoring path has been validated end-to-end.
+
+Failed application requests were deliberately generated, telemetry was received by Application Insights, `alert-failed-requests-dev` entered the fired state, and the configured Action Group successfully delivered an Azure Monitor Sev2 alert notification by email.
+
 The Log Analytics workspace currently uses 30-day retention. This provides sufficient retention for a development environment while limiting unnecessary long-term data retention and associated cost.
 
-Azure Monitor alerts, Action Groups and additional health/operational monitoring will be added as the platform develops.
+Additional health monitoring and operational controls can be introduced as the platform develops.
 
 ---
 
@@ -262,6 +347,10 @@ Azure Key Vault
         |
         +-- Purge protection
         |
+        +-- Application configuration
+        |
+        +-- AlertEmail
+        |
         +-- Project tags
 ```
 
@@ -275,7 +364,7 @@ Private network access will be introduced later through Private Endpoints and Pr
 
 ### Application-to-Key-Vault Integration
 
-The ASP.NET Core application now consumes configuration from the deployed Key Vault.
+The ASP.NET Core application consumes configuration from the deployed Key Vault.
 
 During local development, the application uses:
 
@@ -323,13 +412,15 @@ Azure Key Vault
 
 The application code can therefore move from a developer identity locally to a workload identity in Azure without introducing an application-managed client secret.
 
-No application secret values or Azure connection strings are committed to the repository.
+Key Vault also provides environment-specific configuration to the deployment platform. The Azure DevOps service connection identity has narrowly scoped secret-read access required to retrieve `AlertEmail` for the observability deployment.
+
+No application secret values, notification email addresses or Azure connection strings are committed to the repository.
 
 ---
 
 ## Application Integration Architecture
 
-The current runtime integration now connects the application to two deployed Azure platform services.
+The runtime and operational integrations now connect the application to the deployed security and observability capabilities.
 
 ```text
                          ASP.NET Core Application
@@ -342,22 +433,28 @@ The current runtime integration now connects the application to two deployed Azu
                   v                               v
         Microsoft Entra ID               Application Insights
                   |                               |
-                  v                               v
-             Azure RBAC                 Log Analytics Workspace
-                  |
-                  v
-             Azure Key Vault
+                  v                    +----------+----------+
+             Azure RBAC               |                     |
+                  |                    v                     v
+                  v             Log Analytics        Failed Requests
+             Azure Key Vault                                 |
+                                                            v
+                                                    Azure Monitor Alert
+                                                            |
+                                                            v
+                                                       Action Group
+                                                            |
+                                                            v
+                                                    Email Notification
 ```
 
-This is an important architectural transition for the project.
+This represents an important architectural transition for the project.
 
-The networking, observability and security resources are no longer only independent Azure infrastructure components. The workload now actively consumes the identity/security and observability capabilities provided by the platform.
+The networking, observability and security resources are no longer only independent Azure infrastructure components. The workload actively consumes the identity/security and observability capabilities provided by the platform, and the observability layer can now detect an application failure condition and trigger an operational notification.
 
-The current integration is tested locally because App Service provisioning remains blocked by subscription quota.
+The current application integration is tested locally because App Service provisioning remains blocked by subscription quota.
 
 When App Service becomes deployable, the developer identity used by `DefaultAzureCredential` locally can be replaced by the App Service system-assigned managed identity while preserving the same application authentication model.
-
----
 
 ## Deployment Architecture
 
@@ -427,6 +524,12 @@ env-cloudplatformlab-dev
 The environment uses a manual approval check before infrastructure changes are applied.
 
 Feature-branch pipeline runs are used to validate infrastructure and pipeline behaviour before changes are merged. Dev environment infrastructure deployment is performed from the merged `Dev` branch.
+
+The observability pipeline also retrieves the `AlertEmail` value from Key Vault during What-If and deployment.
+
+The pipeline identity is authorized through Azure RBAC and uses the `Key Vault Secrets User` role at the Key Vault scope.
+
+The email value is then passed to the observability Bicep deployment as a parameter rather than being hardcoded in the repository.
 
 ---
 
@@ -556,7 +659,29 @@ Azure RBAC
 Azure Key Vault
 ```
 
-This allows the same application design to use environment-appropriate identities without embedding Azure credentials in application configuration.
+The Azure DevOps service connection also uses an identity-based access path for deployment-time Key Vault access:
+
+```text
+Azure DevOps
+      |
+      v
+Workload Identity Federation
+      |
+      v
+Service Connection Identity
+      |
+      v
+Azure RBAC
+Key Vault Secrets User
+      |
+      v
+Azure Key Vault
+      |
+      v
+AlertEmail
+```
+
+This allows both application runtime access and pipeline deployment-time access to use Microsoft Entra ID and Azure RBAC rather than embedded credentials.
 
 ---
 
@@ -575,6 +700,9 @@ Current security controls include:
 - developer identity authentication through Microsoft Entra ID
 - Azure RBAC authorization for Key Vault access
 - Key Vault integration verification without exposing secret values
+- Azure DevOps service connection identity granted scoped `Key Vault Secrets User` access
+- monitoring notification email stored in Key Vault rather than source control
+- observability pipeline retrieves deployment-time configuration from Key Vault
 - Azure RBAC
 - controlled Azure DevOps service connection
 - manual approval before infrastructure deployment
@@ -596,6 +724,8 @@ Planned security improvements include:
 - tighter RBAC where appropriate
 
 Secrets and credentials are not intended to be stored in source control.
+
+---
 
 ## Resource Organisation
 
@@ -663,6 +793,8 @@ The Log Analytics workspace uses a 30-day retention period to provide a useful o
 
 The application is now generating real telemetry, allowing ingestion volume and retention to be reviewed against actual application activity as part of the platform's cost controls.
 
+Monitoring resources are kept intentionally small and focused. The current alerting implementation uses an existing Application Insights metric and a single Action Group rather than introducing unnecessary monitoring infrastructure.
+
 Because the environment is defined as code, resources can be removed and recreated later.
 
 This also helps test whether the infrastructure is genuinely reproducible.
@@ -673,7 +805,7 @@ The independent deployment architecture allows useful platform and application-i
 
 ## Target Architecture
 
-The deployed networking, observability and security foundations, together with the application integrations and defined App Service workload, form the initial platform baseline.
+The deployed networking, observability and security foundations, together with the application integrations, operational alerting and defined App Service workload, form the initial platform baseline.
 
 The longer-term target architecture includes the following areas.
 
@@ -705,23 +837,41 @@ The longer-term target architecture includes the following areas.
 
 ### Data
 
-- Azure SQL
+- Azure Cosmos DB
+- Azure SQL where appropriate
 - Azure Storage
-- Cosmos DB where appropriate
 
 ### Messaging
 
 - Azure Service Bus
 - Azure Event Grid
 
+### API Platform
+
+- Azure API Management
+- API policies
+- throttling / rate limiting
+- authentication and authorization
+- API versioning
+- API observability
+
+### Containers
+
+- Azure Container Registry
+- Azure Container Apps
+- managed identity
+- container deployment through CI/CD
+- container observability and scaling
+
 ### Observability
 
 - Azure Monitor
 - Application Insights
 - Log Analytics
-- alerts
+- metric alerts
 - Action Groups
 - health monitoring
+- additional operational alerting where justified
 
 ### Infrastructure and DevOps
 
@@ -847,7 +997,39 @@ Deploying Application Insights alone does not demonstrate application observabil
 
 Integrating the Application Insights SDK into the ASP.NET Core application allows real request telemetry to be generated and sent to the deployed observability platform.
 
-This validates the path from the running workload through Application Insights to the Log Analytics workspace and provides a foundation for later alerts, investigation and operational monitoring.
+This validates the path from the running workload through Application Insights to the Log Analytics workspace and provides a foundation for alerts, investigation and operational monitoring.
+
+### Why Azure Monitor Failed-Request Alerting
+
+The project already produces real Application Insights request telemetry, so failed-request monitoring provides a meaningful operational control rather than an artificial alert created only for demonstration.
+
+The alert is scoped to the deployed Application Insights resource and evaluates the failed-request metric.
+
+This creates a direct operational path from application failure telemetry to an actionable notification.
+
+### Why an Action Group
+
+An Azure Monitor alert without a notification path only detects a problem.
+
+The Action Group turns that detection into an operational response by delivering an alert notification when the metric condition is met.
+
+This demonstrates the difference between collecting telemetry and actually operating a monitored workload.
+
+### Why Store AlertEmail in Key Vault
+
+The notification destination is environment-specific configuration and does not need to be hardcoded into public Infrastructure as Code.
+
+Storing `AlertEmail` in Key Vault keeps the value out of source control while still allowing the deployment pipeline to create the Action Group reproducibly.
+
+The Azure DevOps service connection identity retrieves the value through Azure RBAC at deployment time.
+
+### Why Pipeline Identity Reads Key Vault
+
+The observability pipeline needs the Action Group email value during both What-If and deployment.
+
+Rather than using a static pipeline secret or client credential, the existing Workload Identity Federation service connection is granted scoped `Key Vault Secrets User` access.
+
+This extends the project's identity-first model to deployment-time configuration retrieval.
 
 ### Why Local Integration Before App Service Deployment
 
@@ -954,6 +1136,16 @@ Implemented and validated:
 - real application telemetry received by Application Insights
 - individual application requests verified in Application Insights
 - local environment-specific configuration kept outside source control using .NET User Secrets
+- Azure Monitor Action Group deployed through Bicep
+- failed-request Azure Monitor metric alert deployed through Bicep
+- alert scoped to Application Insights request-failure telemetry
+- `AlertEmail` stored in Azure Key Vault
+- Azure DevOps service connection identity granted scoped `Key Vault Secrets User` access
+- observability pipeline retrieves `AlertEmail` securely during What-If and deployment
+- email value kept out of Git and pipeline logs
+- Azure Monitor failed-request alert tested with deliberately generated failed requests
+- Sev2 Azure Monitor alert successfully fired
+- Action Group successfully delivered the alert notification by email
 
 Currently provisioned:
 
@@ -977,6 +1169,15 @@ rg-cloudplatformlab-dev
 |   Application Insights
 |   linked to Log Analytics
 |   receiving application telemetry
+|   monitored for failed requests
+|
++-- ag-cloudplatformlab-dev
+|   Azure Monitor Action Group
+|   email receiver supplied from Key Vault
+|
++-- alert-failed-requests-dev
+|   Azure Monitor metric alert
+|   monitors Application Insights failed requests
 |
 +-- kv-cloudplatformlab-dev
     Azure Key Vault
@@ -984,7 +1185,8 @@ rg-cloudplatformlab-dev
     Soft delete
     90-day recovery period
     Purge protection
-    consumed by local application
+    application configuration
+    AlertEmail deployment configuration
 ```
 
 Infrastructure defined but not currently provisioned:
@@ -997,24 +1199,25 @@ The App Service infrastructure has been validated through Bicep, but provisionin
 
 The App Service SKU is parameterised so the deployment architecture is not permanently tied to S1.
 
-The App Service quota constraint does not prevent application integration work from continuing. The application currently consumes the real Dev Key Vault and Application Insights resources while running locally.
+The App Service quota constraint does not prevent application integration or operational monitoring work from continuing. The application currently consumes the real Dev Key Vault and Application Insights resources while running locally, and Azure Monitor operates against that real telemetry.
 
 In progress:
 
 - automated application tests
 - application deployment once suitable App Service capacity is available
-- health monitoring
-- Azure Monitor alerting
+- broader health monitoring
 
 Planned:
 
 - App Service-to-Key-Vault authentication through system-assigned managed identity
-- Azure Monitor alerts
-- Action Groups
 - Azure Policy
 - Private Endpoints
 - Private DNS
 - hub-spoke networking
+- Cosmos DB application persistence
+- Azure Container Registry
+- Azure Container Apps
+- Azure API Management
 - Defender for Cloud
 - Terraform
 - landing zone/governance example
@@ -1044,3 +1247,5 @@ Selected implementation evidence is stored in [`docs/evidence`](evidence/).
 | [Key Vault application integration](evidence/15-key-vault-application-integration.png) | ASP.NET Core application successfully loading Key Vault configuration through Azure identity and RBAC without exposing the secret value |
 | [Application Insights live telemetry](evidence/16-application-insights-live-telemetry.png) | Real telemetry from the running ASP.NET Core application received by the deployed Application Insights resource |
 | [Application Insights request telemetry](evidence/17-application-insights-request-telemetry.png) | Individual application requests, including the Key Vault integration endpoint, captured and correlated in Application Insights |
+| [Azure Monitor alert email fired](evidence/18-azure-monitor-alert-email-fired.png) | End-to-end operational notification from failed application request telemetry through Azure Monitor and the Action Group to email |
+| [Azure Monitor alert fired](evidence/19-azure-monitor-alert-fired.png) | Fired Azure Monitor metric alert visible in Azure and scoped to the Application Insights failed-request signal |
