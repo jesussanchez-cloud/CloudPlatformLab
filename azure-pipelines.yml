@@ -67,3 +67,12 @@ stages:
     resourceGroupName: '$(resourceGroupName)'
     serviceConnection: '$(serviceConnection)'
     devEnvironment: '$(devEnvironment)'
+
+- template: pipelines/templates/governance.yml
+  parameters:
+    dependsOn: Build
+    resourceGroupName: '$(resourceGroupName)'
+    serviceConnection: '$(serviceConnection)'
+    devEnvironment: '$(devEnvironment)'
+    location: '$(location)'
+
