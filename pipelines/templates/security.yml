@@ -12,7 +12,7 @@ parameters:
   type: string
 
 - name: runCondition
-  type: string
+  type: object
   default: 'true'
 
 stages:
