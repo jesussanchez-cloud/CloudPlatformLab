@@ -187,3 +187,5 @@ stages:
                   --template-file infra/governance/main.bicep \
                   --parameters resourceGroupName=${{ parameters.resourceGroupName }} \
                   --name cloudplatformlab-governance-dev
+
+#detect changes test
