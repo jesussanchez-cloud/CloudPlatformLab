@@ -11,6 +11,9 @@ parameters:
 - name: devEnvironment
   type: string
 
+- name: runCondition
+  type: string
+  default: 'true'
 
 stages:
 
@@ -21,7 +24,7 @@ stages:
 - stage: ValidateNetworking
   displayName: 'Validate Networking'
   dependsOn: ${{ parameters.dependsOn }}
-  condition: succeeded()
+  condition: and(succeeded(), ${{ parameters.runCondition }})
 
   jobs:
 
