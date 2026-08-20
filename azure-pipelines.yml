@@ -13,12 +13,103 @@ variables:
 
 stages:
 
+# ============================================================
+# Detect infrastructure changes
+# ============================================================
+
+- stage: DetectChanges
+  displayName: 'Detect Changes'
+  jobs:
+  - job: DetectChanges
+    displayName: 'Detect Changed Platform Areas'
+    steps:
+
+    - checkout: self
+      fetchDepth: 0
+
+    - bash: |
+        set -e
+
+        echo "Detecting changed files..."
+
+        # For Dev runs, compare the current commit with its first parent.
+        # This captures the changes introduced by the merge/commit that
+        # triggered the pipeline.
+        CHANGED_FILES=$(git diff --name-only HEAD^ HEAD)
+
+        echo "Changed files:"
+        echo "$CHANGED_FILES"
+
+        APPSERVICE=false
+        NETWORKING=false
+        OBSERVABILITY=false
+        SECURITY=false
+        GOVERNANCE=false
+
+        # A change to the root pipeline can affect orchestration of every
+        # platform area, so validate all infrastructure paths.
+        if echo "$CHANGED_FILES" | grep -q '^azure-pipelines.yml$'; then
+          echo "Root pipeline changed - enabling all infrastructure paths."
+
+          APPSERVICE=true
+          NETWORKING=true
+          OBSERVABILITY=true
+          SECURITY=true
+          GOVERNANCE=true
+        else
+          if echo "$CHANGED_FILES" | grep -Eq \
+            '^(infra/appservice/|pipelines/templates/appservice.yml$)'; then
+            APPSERVICE=true
+          fi
+
+          if echo "$CHANGED_FILES" | grep -Eq \
+            '^(infra/networking/|pipelines/templates/networking.yml$)'; then
+            NETWORKING=true
+          fi
+
+          if echo "$CHANGED_FILES" | grep -Eq \
+            '^(infra/observability/|pipelines/templates/observability.yml$)'; then
+            OBSERVABILITY=true
+          fi
+
+          if echo "$CHANGED_FILES" | grep -Eq \
+            '^(infra/security/|pipelines/templates/security.yml$)'; then
+            SECURITY=true
+          fi
+
+          if echo "$CHANGED_FILES" | grep -Eq \
+            '^(infra/governance/|pipelines/templates/governance.yml$)'; then
+            GOVERNANCE=true
+          fi
+        fi
+
+        echo "App Service changed: $APPSERVICE"
+        echo "Networking changed: $NETWORKING"
+        echo "Observability changed: $OBSERVABILITY"
+        echo "Security changed: $SECURITY"
+        echo "Governance changed: $GOVERNANCE"
+
+        echo "##vso[task.setvariable variable=appServiceChanged;isOutput=true]$APPSERVICE"
+        echo "##vso[task.setvariable variable=networkingChanged;isOutput=true]$NETWORKING"
+        echo "##vso[task.setvariable variable=observabilityChanged;isOutput=true]$OBSERVABILITY"
+        echo "##vso[task.setvariable variable=securityChanged;isOutput=true]$SECURITY"
+        echo "##vso[task.setvariable variable=governanceChanged;isOutput=true]$GOVERNANCE"
+
+      name: detect
+      displayName: 'Determine Changed Infrastructure Areas'
+
+# ============================================================
+# Build application
+# ============================================================
+
 - stage: Build
   displayName: 'Build Application'
+  dependsOn: DetectChanges
   jobs:
   - job: BuildApplication
     displayName: 'Build .NET Application'
     steps:
+
     - task: UseDotNet@2
       displayName: 'Install .NET 8 SDK'
       inputs:
@@ -38,41 +129,78 @@ stages:
         projects: '**/*.sln'
         arguments: '--configuration Release --no-restore'
 
+# ============================================================
+# Infrastructure domains
+# ============================================================
+
 - template: pipelines/templates/appservice.yml
   parameters:
-    dependsOn: Build
+    dependsOn:
+    - Build
+    - DetectChanges
     resourceGroupName: '$(resourceGroupName)'
     serviceConnection: '$(serviceConnection)'
     devEnvironment: '$(devEnvironment)'
     location: '$(location)'
     appServiceSku: '$(appServiceSku)'
+    runCondition: |
+      eq(
+        stageDependencies.DetectChanges.DetectChanges.outputs['detect.appServiceChanged'],
+        'true'
+      )
 
 - template: pipelines/templates/networking.yml
   parameters:
-    dependsOn: Build
+    dependsOn:
+    - Build
+    - DetectChanges
     resourceGroupName: '$(resourceGroupName)'
     serviceConnection: '$(serviceConnection)'
     devEnvironment: '$(devEnvironment)'
+    runCondition: |
+      eq(
+        stageDependencies.DetectChanges.DetectChanges.outputs['detect.networkingChanged'],
+        'true'
+      )
 
 - template: pipelines/templates/observability.yml
   parameters:
-    dependsOn: Build
+    dependsOn:
+    - Build
+    - DetectChanges
     resourceGroupName: '$(resourceGroupName)'
     serviceConnection: '$(serviceConnection)'
     devEnvironment: '$(devEnvironment)'
+    runCondition: |
+      eq(
+        stageDependencies.DetectChanges.DetectChanges.outputs['detect.observabilityChanged'],
+        'true'
+      )
 
 - template: pipelines/templates/security.yml
   parameters:
-    dependsOn: Build
+    dependsOn:
+    - Build
+    - DetectChanges
     resourceGroupName: '$(resourceGroupName)'
     serviceConnection: '$(serviceConnection)'
     devEnvironment: '$(devEnvironment)'
+    runCondition: |
+      eq(
+        stageDependencies.DetectChanges.DetectChanges.outputs['detect.securityChanged'],
+        'true'
+      )
 
 - template: pipelines/templates/governance.yml
   parameters:
-    dependsOn: Build
+    dependsOn:
+    - Build
+    - DetectChanges
     resourceGroupName: '$(resourceGroupName)'
     serviceConnection: '$(serviceConnection)'
     devEnvironment: '$(devEnvironment)'
-    location: '$(location)'
-
+    runCondition: |
+      eq(
+        stageDependencies.DetectChanges.DetectChanges.outputs['detect.governanceChanged'],
+        'true'
+      )
