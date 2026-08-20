@@ -145,7 +145,7 @@ stages:
     appServiceSku: '$(appServiceSku)'
     runCondition: |
       eq(
-        stageDependencies.DetectChanges.DetectChanges.outputs['detect.appServiceChanged'],
+        dependencies.DetectChanges.outputs['DetectChanges.detect.appServiceChanged'],
         'true'
       )
 
@@ -159,7 +159,7 @@ stages:
     devEnvironment: '$(devEnvironment)'
     runCondition: |
       eq(
-        stageDependencies.DetectChanges.DetectChanges.outputs['detect.networkingChanged'],
+        dependencies.DetectChanges.outputs['DetectChanges.detect.networkingChanged'],
         'true'
       )
 
@@ -173,7 +173,7 @@ stages:
     devEnvironment: '$(devEnvironment)'
     runCondition: |
       eq(
-        stageDependencies.DetectChanges.DetectChanges.outputs['detect.observabilityChanged'],
+        dependencies.DetectChanges.outputs['DetectChanges.detect.observabilityChanged'],
         'true'
       )
 
@@ -187,7 +187,7 @@ stages:
     devEnvironment: '$(devEnvironment)'
     runCondition: |
       eq(
-        stageDependencies.DetectChanges.DetectChanges.outputs['detect.securityChanged'],
+        dependencies.DetectChanges.outputs['DetectChanges.detect.securityChanged'],
         'true'
       )
 
@@ -202,6 +202,6 @@ stages:
     location: '$(location)'
     runCondition: |
       eq(
-        stageDependencies.DetectChanges.DetectChanges.outputs['detect.governanceChanged'],
+        dependencies.DetectChanges.outputs['DetectChanges.detect.governanceChanged'],
         'true'
       )
