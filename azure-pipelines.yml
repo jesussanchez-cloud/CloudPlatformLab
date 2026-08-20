@@ -199,6 +199,7 @@ stages:
     resourceGroupName: '$(resourceGroupName)'
     serviceConnection: '$(serviceConnection)'
     devEnvironment: '$(devEnvironment)'
+    location: '$(location)'
     runCondition: |
       eq(
         stageDependencies.DetectChanges.DetectChanges.outputs['detect.governanceChanged'],
