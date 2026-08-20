@@ -88,6 +88,20 @@ stages:
             exit 1
           fi
 
+          echo "Checking Microsoft.PolicyInsights registration..."
+
+          policyInsightsState=$(az provider show \
+            --namespace Microsoft.PolicyInsights \
+            --query registrationState \
+            --output tsv)
+
+          echo "Microsoft.PolicyInsights registration state: $policyInsightsState"
+
+          if [ "$policyInsightsState" != "Registered" ]; then
+            echo "##vso[task.logissue type=error]Microsoft.PolicyInsights is not registered."
+            exit 1
+          fi
+
           echo "Checking target resource group..."
 
           resourceGroupExists=$(az group exists \

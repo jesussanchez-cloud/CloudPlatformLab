@@ -10,7 +10,7 @@ The project is being built incrementally so that each part can be understood, te
 
 ## Current Architecture
 
-CloudPlatformLab currently has deployed Dev networking, observability and security foundations, with the application platform defined separately in Bicep.
+CloudPlatformLab currently has deployed Dev networking, observability, security and governance foundations, with the application platform defined separately in Bicep.
 
 ```text
                               Azure DevOps
@@ -18,15 +18,15 @@ CloudPlatformLab currently has deployed Dev networking, observability and securi
                                    v
                             Build Application
                                    |
-              +--------------------+--------------------+
-              |                    |                    |
-              v                    v                    v
-        App Service            Networking         Observability
-              |                    |                    |
-              +--------------------+--------------------+
-                                   |
-                                   v
-                                Security
+        +--------------------------+--------------------------+
+        |              |                 |                   |
+        v              v                 v                   v
+   App Service     Networking       Observability        Security
+        |              |                 |                   |
+        +--------------+--------+--------+-------------------+
+                                |
+                                v
+                           Governance
 
 Each infrastructure domain follows:
 
@@ -45,9 +45,9 @@ Manual Approval
 Deployment
 ```
 
-The networking, observability and security deployment paths have been successfully executed through Azure DevOps.
+The networking, observability, security and governance deployment paths have been implemented through Azure DevOps.
 
-The application now also consumes deployed platform services during local development:
+The application also consumes deployed platform services during local development:
 
 ```text
 ASP.NET Core Application
@@ -60,16 +60,16 @@ DefaultAzureCredential          Application Insights SDK
         v                               v
 Microsoft Entra ID             Application Insights
         |                               |
-        v                               +--------------------+
-Azure RBAC                     |                    |
-        |                      v                    v
-        v              Log Analytics       Azure Monitor Alert
-Azure Key Vault                                     |
-                                                    v
+        v                      +--------+---------+
+Azure RBAC                     |                  |
+        |                      v                  v
+        v              Log Analytics      Azure Monitor Alert
+Azure Key Vault                                    |
+                                                   v
                                              Action Group
-                                                    |
-                                                    v
-                                             Email Notification
+                                                   |
+                                                   v
+                                           Email Notification
 ```
 
 The local application authenticates to Azure through `DefaultAzureCredential` and the developer's authenticated Azure identity.
@@ -82,11 +82,19 @@ Azure Monitor alerting has also been implemented. Failed application requests ar
 
 This monitoring path has been tested end-to-end by deliberately generating failed application requests and confirming that the Azure Monitor alert fired and the Action Group delivered the notification.
 
+The platform now also includes an initial governance implementation using Azure Policy.
+
+A custom policy audits resources in the Dev resource group for the required `Environment` tag. The policy definition and assignment are represented through Bicep and integrated into an independent governance pipeline path.
+
+Azure Policy compliance evaluation has been validated against the real Dev environment. Seven resources were evaluated, with six compliant and one non-compliant resource identified.
+
+The non-compliant resource is an Application Insights smart-detection Action Group created by Azure rather than one of the project's explicitly Bicep-managed resources. The result has deliberately not been manually changed simply to obtain 100% compliance. It demonstrates that policy findings require investigation and an appropriate remediation or exemption decision rather than automatic modification.
+
 The App Service infrastructure follows an independent deployment path. Its Bicep definition is valid, but provisioning using the currently selected S1 SKU is blocked by the subscription's App Service quota.
 
-Keeping these deployment paths independent allows networking, observability and security infrastructure to be validated and deployed without being blocked by an unrelated application-platform constraint.
+Keeping these deployment paths independent allows networking, observability, security and governance work to continue without being blocked by an unrelated application-platform constraint.
 
-The Azure DevOps pipeline has also been modularised into reusable YAML templates so that each infrastructure domain can evolve independently without turning the root pipeline into a large monolithic definition.
+The Azure DevOps pipeline has been modularised into reusable YAML stage templates so that each infrastructure domain can evolve independently without turning the root pipeline into a large monolithic definition.
 
 ---
 
@@ -137,7 +145,11 @@ infra/
 |   +-- main.bicep
 |
 +-- security/
+|   +-- main.bicep
+|
++-- governance/
     +-- main.bicep
+    +-- assignment.bicep
 ```
 
 The App Service template defines:
@@ -175,7 +187,13 @@ The security template defines:
 - purge protection
 - common resource tags
 
-Infrastructure is deployed into:
+The governance templates define:
+
+- custom Azure Policy definition
+- audit policy for the required `Environment` tag
+- policy assignment targeting the Dev resource group
+
+Most workload infrastructure is deployed into:
 
 ```text
 rg-cloudplatformlab-dev
@@ -186,6 +204,8 @@ Region:
 ```text
 UK South
 ```
+
+Governance requires a broader deployment model because Azure Policy definitions exist above individual resource-group resources. The governance Bicep therefore separates the policy definition from the resource-group-scoped assignment.
 
 Separating infrastructure by platform concern allows each area to be validated, deployed and evolved independently while remaining managed through the same repository and CI/CD workflow.
 
@@ -222,7 +242,7 @@ The networking infrastructure is independently deployable through the Azure DevO
 
 ## Observability Architecture
 
-The deployed observability foundation now provides application telemetry, centralized log storage, metric-based failure detection and automated notification.
+The deployed observability foundation provides application telemetry, centralized log storage, metric-based failure detection and automated notification.
 
 ```text
 ASP.NET Core Application
@@ -262,7 +282,7 @@ Application Insights registration is conditional so an environment without telem
 
 ### Azure Monitor Alerting
 
-The observability platform now includes an Azure Monitor metric alert monitoring failed Application Insights requests.
+The observability platform includes an Azure Monitor metric alert monitoring failed Application Insights requests.
 
 The implemented monitoring flow is:
 
@@ -320,15 +340,13 @@ The pipeline identity is granted the `Key Vault Secrets User` role required to r
 
 The pipeline does not print the retrieved email address to its logs.
 
-This separates sensitive environment-specific notification configuration from the IaC definition while keeping the Action Group itself reproducibly deployed through Bicep.
+This separates environment-specific notification configuration from the IaC definition while keeping the Action Group itself reproducibly deployed through Bicep.
 
 The monitoring path has been validated end-to-end.
 
 Failed application requests were deliberately generated, telemetry was received by Application Insights, `alert-failed-requests-dev` entered the fired state, and the configured Action Group successfully delivered an Azure Monitor Sev2 alert notification by email.
 
 The Log Analytics workspace currently uses 30-day retention. This provides sufficient retention for a development environment while limiting unnecessary long-term data retention and associated cost.
-
-Additional health monitoring and operational controls can be introduced as the platform develops.
 
 ---
 
@@ -392,8 +410,6 @@ A test configuration value has been successfully loaded from Key Vault into .NET
 
 The `/health/keyvault` endpoint verifies that the value was loaded without returning or logging the secret itself.
 
-This provides a working identity and Key Vault integration before App Service is available.
-
 Once App Service can be provisioned, the application authentication path is intended to become:
 
 ```text
@@ -418,9 +434,136 @@ No application secret values, notification email addresses or Azure connection s
 
 ---
 
+## Governance Architecture
+
+The Dev environment now includes an initial Azure Policy governance layer.
+
+The first implemented governance control audits resources for the required `Environment` tag.
+
+```text
+Azure DevOps
+     |
+     v
+Governance Pipeline
+     |
+     +-- Bicep Validation
+     |
+     +-- Provider Readiness
+     |      |
+     |      +-- Microsoft.Authorization
+     |      +-- Microsoft.PolicyInsights
+     |
+     +-- What-If
+     |
+     +-- Manual Approval
+     |
+     v
+Azure Policy Definition
+     |
+     v
+Policy Assignment
+     |
+     v
+rg-cloudplatformlab-dev
+     |
+     v
+Resource Compliance Evaluation
+```
+
+The custom policy uses an `Audit` effect.
+
+Resources that do not contain the required `Environment` tag are reported as non-compliant without the policy modifying or blocking those resources.
+
+This is intentional for the first governance implementation. It allows the platform to observe the existing environment and understand the effect of a governance rule before introducing enforcement.
+
+### Policy Scope
+
+The policy definition and assignment are separated because they operate at different Azure scopes.
+
+The policy definition establishes the reusable governance rule, while the assignment applies that rule to the Dev resource group.
+
+The implemented assignment targets:
+
+```text
+rg-cloudplatformlab-dev
+```
+
+This keeps the initial governance control tightly scoped to the project's development environment.
+
+### Compliance Evaluation
+
+Azure Policy compliance evaluation has been successfully executed against the deployed Dev environment.
+
+The observed compliance state was:
+
+```text
+Resources evaluated: 7
+Compliant:           6
+Non-compliant:       1
+Compliance:          86%
+```
+
+The non-compliant resource was:
+
+```text
+application insights smart detection
+Type: Microsoft.Insights/actionGroups
+```
+
+This Action Group is an Azure-created Application Insights supporting resource rather than one explicitly created by the project's Bicep templates.
+
+The finding has deliberately not been manually remediated simply to make the compliance score 100%.
+
+Instead, it demonstrates an important governance principle: a non-compliant result should be investigated to determine whether the resource should be changed, excluded by policy design, or covered by a justified policy exemption.
+
+This provides a more realistic governance workflow:
+
+```text
+Policy
+   |
+   v
+Compliance Evaluation
+   |
+   v
+Non-Compliant Resource
+   |
+   v
+Investigation
+   |
+   +--> Remediate where appropriate
+   |
+   +--> Refine policy scope where appropriate
+   |
+   +--> Use justified exemption where appropriate
+```
+
+A future governance increment can formalise the treatment of Azure-managed supporting resources rather than modifying them manually.
+
+### Governance Pipeline
+
+Governance has its own reusable Azure DevOps pipeline template:
+
+```text
+pipelines/templates/governance.yml
+```
+
+The governance readiness checks validate:
+
+- `Microsoft.Authorization` resource-provider registration
+- `Microsoft.PolicyInsights` resource-provider registration
+- required deployment scope/environment prerequisites
+
+`Microsoft.PolicyInsights` is required for Azure Policy compliance evaluation and was added to the readiness checks after validating the real compliance workflow.
+
+The service connection has the Azure permissions required to deploy the governance resources, including `Resource Policy Contributor` for policy operations.
+
+This keeps policy deployment controlled through the same identity-based CI/CD model as the other platform domains.
+
+---
+
 ## Application Integration Architecture
 
-The runtime and operational integrations now connect the application to the deployed security and observability capabilities.
+The runtime and operational integrations connect the application to the deployed security and observability capabilities, while Azure Policy evaluates the surrounding platform resources.
 
 ```text
                          ASP.NET Core Application
@@ -446,11 +589,17 @@ The runtime and operational integrations now connect the application to the depl
                                                             |
                                                             v
                                                     Email Notification
+
+                       Azure Policy Governance
+                                  |
+                                  v
+                     Dev Resource Evaluation
+                                  |
+                                  v
+                      Compliance / Findings
 ```
 
-This represents an important architectural transition for the project.
-
-The networking, observability and security resources are no longer only independent Azure infrastructure components. The workload actively consumes the identity/security and observability capabilities provided by the platform, and the observability layer can now detect an application failure condition and trigger an operational notification.
+The workload actively consumes the identity/security and observability capabilities provided by the platform, while the governance layer independently evaluates the Azure resources against defined policy requirements.
 
 The current application integration is tested locally because App Service provisioning remains blocked by subscription quota.
 
@@ -474,6 +623,8 @@ azure-pipelines.yml
         +-- pipelines/templates/observability.yml
         |
         +-- pipelines/templates/security.yml
+        |
+        +-- pipelines/templates/governance.yml
 ```
 
 The root pipeline performs the shared application build and then invokes the independent infrastructure templates.
@@ -490,30 +641,30 @@ Dev
       v
 Build Application
       |
-      +---------------+---------------+---------------+
-      |               |               |               |
-      v               v               v               v
- App Service      Networking     Observability      Security
-      |               |               |               |
-      v               v               v               v
- Validation      Validation      Validation      Validation
-      |               |               |               |
-      v               v               v               v
- Readiness       Readiness       Readiness       Readiness
-      |               |               |               |
-      v               v               v               v
-  What-If         What-If         What-If         What-If
-      |               |               |               |
-      v               v               v               v
- Approval         Approval         Approval         Approval
-      |               |               |               |
-      v               v               v               v
-Deployment       Deployment      Deployment      Deployment
+      +---------------+---------------+---------------+---------------+
+      |               |               |               |               |
+      v               v               v               v               v
+ App Service      Networking     Observability      Security      Governance
+      |               |               |               |               |
+      v               v               v               v               v
+ Validation      Validation      Validation      Validation      Validation
+      |               |               |               |               |
+      v               v               v               v               v
+ Readiness       Readiness       Readiness       Readiness       Readiness
+      |               |               |               |               |
+      v               v               v               v               v
+  What-If         What-If         What-If         What-If         What-If
+      |               |               |               |               |
+      v               v               v               v               v
+ Approval         Approval         Approval         Approval         Approval
+      |               |               |               |               |
+      v               v               v               v               v
+Deployment       Deployment      Deployment      Deployment      Deployment
 ```
 
 The independent paths prevent a deployment constraint affecting one infrastructure area from unnecessarily blocking another.
 
-This is currently demonstrated by the App Service quota constraint: App Service deployment can stop at its readiness stage while networking, observability and security continue independently through validation, approval and deployment.
+This is currently demonstrated by the App Service quota constraint: App Service deployment can stop at its readiness stage while networking, observability, security and governance continue independently.
 
 Deployment stages target the Azure DevOps environment:
 
@@ -525,11 +676,13 @@ The environment uses a manual approval check before infrastructure changes are a
 
 Feature-branch pipeline runs are used to validate infrastructure and pipeline behaviour before changes are merged. Dev environment infrastructure deployment is performed from the merged `Dev` branch.
 
-The observability pipeline also retrieves the `AlertEmail` value from Key Vault during What-If and deployment.
+The observability pipeline retrieves the `AlertEmail` value from Key Vault during What-If and deployment.
 
 The pipeline identity is authorized through Azure RBAC and uses the `Key Vault Secrets User` role at the Key Vault scope.
 
-The email value is then passed to the observability Bicep deployment as a parameter rather than being hardcoded in the repository.
+The email value is passed to the observability Bicep deployment as a secure parameter rather than being hardcoded in the repository.
+
+The governance pipeline deploys and validates the Azure Policy governance layer through the same controlled CI/CD approach used by the other infrastructure domains.
 
 ---
 
@@ -543,7 +696,7 @@ Each infrastructure path follows a controlled sequence:
 2. Deployment readiness checks
 3. Bicep What-If
 4. Azure DevOps Environment approval
-5. Bicep resource-group deployment
+5. Bicep deployment
 
 App Service readiness currently validates:
 
@@ -567,9 +720,15 @@ Security readiness currently validates:
 - `Microsoft.KeyVault` resource provider registration
 - target resource group availability
 
+Governance readiness currently validates:
+
+- `Microsoft.Authorization` resource provider registration
+- `Microsoft.PolicyInsights` resource provider registration
+- required deployment scope/environment prerequisites
+
 Readiness checks are intentionally separated from Bicep validation.
 
-Bicep validation verifies the infrastructure definition, while readiness checks detect known subscription or environmental conditions that could prevent a valid template from being deployed.
+Bicep validation verifies the infrastructure definition, while readiness checks detect known subscription or environmental conditions that could prevent a valid template from being deployed or evaluated correctly.
 
 This distinction produces clearer pipeline failures and prevents known environmental constraints from being confused with invalid infrastructure code.
 
@@ -579,9 +738,9 @@ The deployment stages use an Azure Resource Manager service connection configure
 
 ## Resource Provider Strategy
 
-Azure resource-provider registration is treated as a subscription/platform readiness concern rather than being embedded in resource-group workload templates.
+Azure resource-provider registration is treated as a subscription/platform readiness concern rather than being embedded in workload templates.
 
-The pipeline verifies required providers before deployment.
+The pipeline verifies required providers before the relevant deployment path continues.
 
 Providers currently relevant to implemented platform areas include:
 
@@ -598,7 +757,13 @@ Microsoft.Insights
 
 Security
 Microsoft.KeyVault
+
+Governance
+Microsoft.Authorization
+Microsoft.PolicyInsights
 ```
+
+`Microsoft.PolicyInsights` supports Azure Policy compliance evaluation and was added to the governance readiness checks after validating the compliance workflow against the real Dev environment.
 
 This keeps subscription-level platform preparation separate from workload-level Infrastructure as Code.
 
@@ -681,7 +846,9 @@ Azure Key Vault
 AlertEmail
 ```
 
-This allows both application runtime access and pipeline deployment-time access to use Microsoft Entra ID and Azure RBAC rather than embedded credentials.
+For governance operations, the service connection identity is granted the Azure permissions required to manage policy resources, including `Resource Policy Contributor`.
+
+This extends the same identity-first deployment model to governance rather than introducing a separate credential mechanism.
 
 ---
 
@@ -704,6 +871,8 @@ Current security controls include:
 - monitoring notification email stored in Key Vault rather than source control
 - observability pipeline retrieves deployment-time configuration from Key Vault
 - Azure RBAC
+- `Resource Policy Contributor` permissions for governance deployment
+- Azure Policy compliance auditing
 - controlled Azure DevOps service connection
 - manual approval before infrastructure deployment
 - deployment readiness checks
@@ -719,7 +888,6 @@ Planned security improvements include:
 - App Service-to-Key-Vault access through system-assigned managed identity
 - Private Endpoints
 - Private DNS
-- Azure Policy
 - Defender for Cloud
 - tighter RBAC where appropriate
 
@@ -727,9 +895,9 @@ Secrets and credentials are not intended to be stored in source control.
 
 ---
 
-## Resource Organisation
+## Resource Organisation and Governance
 
-Development resources are grouped under:
+Development workload resources are grouped under:
 
 ```text
 rg-cloudplatformlab-dev
@@ -737,7 +905,7 @@ rg-cloudplatformlab-dev
 
 Resources are tagged to support ownership, governance and cost tracking.
 
-Current tags include:
+Current standard tags include:
 
 ```text
 Project       = CloudPlatformLab
@@ -746,7 +914,17 @@ ManagedBy     = Bicep
 CostCenter    = CloudPlatformLab
 ```
 
-The longer-term plan is to enforce some tagging and governance rules through Azure Policy.
+Tagging is no longer represented only as a convention in the Bicep templates.
+
+Azure Policy now evaluates the Dev resource group for the required `Environment` tag.
+
+The first compliance evaluation identified six compliant resources and one non-compliant resource.
+
+The non-compliant resource was investigated rather than automatically modified. It was identified as an Azure-created Application Insights smart-detection Action Group.
+
+This demonstrates the distinction between defining a governance standard and blindly forcing every discovered resource into compliance.
+
+Future governance work can extend the current audit model with additional policies, policy exemptions where justified, stronger enforcement where appropriate and higher-level governance through Management Groups.
 
 ---
 
@@ -791,21 +969,23 @@ Remove paid resources when appropriate
 
 The Log Analytics workspace uses a 30-day retention period to provide a useful observability foundation without retaining development telemetry unnecessarily.
 
-The application is now generating real telemetry, allowing ingestion volume and retention to be reviewed against actual application activity as part of the platform's cost controls.
+The application is generating real telemetry, allowing ingestion volume and retention to be reviewed against actual application activity as part of the platform's cost controls.
 
-Monitoring resources are kept intentionally small and focused. The current alerting implementation uses an existing Application Insights metric and a single Action Group rather than introducing unnecessary monitoring infrastructure.
+Monitoring resources are kept intentionally small and focused. The current alerting implementation uses an existing Application Insights metric and a single project Action Group rather than introducing unnecessary monitoring infrastructure.
+
+Azure Policy adds governance capability without requiring the project to introduce unnecessary workload infrastructure simply for demonstration purposes.
 
 Because the environment is defined as code, resources can be removed and recreated later.
 
 This also helps test whether the infrastructure is genuinely reproducible.
 
-The independent deployment architecture allows useful platform and application-integration work to continue without bypassing the App Service quota constraint.
+The independent deployment architecture allows useful platform, governance and application-integration work to continue without bypassing the App Service quota constraint.
 
 ---
 
 ## Target Architecture
 
-The deployed networking, observability and security foundations, together with the application integrations, operational alerting and defined App Service workload, form the initial platform baseline.
+The deployed networking, observability, security and governance foundations, together with the application integrations, operational alerting and defined App Service workload, form the initial platform baseline.
 
 The longer-term target architecture includes the following areas.
 
@@ -815,7 +995,6 @@ The longer-term target architecture includes the following areas.
 - Managed Identities
 - Azure Key Vault
 - Azure RBAC
-- Azure Policy
 - Defender for Cloud
 - Private Endpoints
 
@@ -886,8 +1065,11 @@ The longer-term target architecture includes the following areas.
 
 ### Governance and FinOps
 
-- Management Groups
 - Azure Policy
+- policy assignments
+- policy compliance evaluation
+- policy exemptions where justified
+- Management Groups
 - Azure RBAC
 - resource tagging
 - Azure Cost Management
@@ -898,7 +1080,7 @@ The longer-term target architecture includes the following areas.
 
 ## Landing Zone Direction
 
-A later phase of the project will look at the platform above the individual workload.
+A later phase of the project will extend the current workload-level governance into a broader platform governance model.
 
 The target structure is roughly:
 
@@ -928,6 +1110,8 @@ This will be used to explore:
 - networking
 - cost controls
 - platform security
+
+The current resource-group-level Azure Policy implementation provides a practical starting point for that later governance model.
 
 The goal is not to reproduce a large enterprise environment at unnecessary cost.
 
@@ -1031,6 +1215,46 @@ Rather than using a static pipeline secret or client credential, the existing Wo
 
 This extends the project's identity-first model to deployment-time configuration retrieval.
 
+### Why Azure Policy
+
+Resource tags existed in the project's Bicep definitions, but IaC conventions alone do not provide an independent governance control.
+
+Azure Policy allows the platform to evaluate deployed resources against a governance requirement regardless of how those resources were created.
+
+The initial policy audits the `Environment` tag because it provides a simple but genuine governance control that can be validated against real Azure resources.
+
+### Why Audit Before Enforcement
+
+The first policy uses the `Audit` effect rather than immediately denying deployments.
+
+Audit mode allows the project to observe how the rule behaves against the existing environment before introducing enforcement.
+
+This has already demonstrated its value by identifying an Azure-created supporting resource that does not satisfy the tagging standard.
+
+Introducing enforcement without first understanding cases like this could create unnecessary deployment failures.
+
+### Why Investigate Non-Compliance Instead of Forcing 100%
+
+Policy compliance is not simply a score to maximize.
+
+The non-compliant Application Insights smart-detection Action Group was created by Azure rather than explicitly through the project's Bicep templates.
+
+The finding is therefore being treated as a governance decision rather than manually changing the resource solely to produce a green compliance dashboard.
+
+The appropriate long-term treatment may be remediation, refinement of policy scope or a documented policy exemption.
+
+### Why Separate Policy Definition and Assignment
+
+The policy definition describes the reusable governance rule, while the assignment determines where that rule applies.
+
+Separating these concerns allows the same policy definition to be applied to different scopes or environments later without duplicating the policy logic.
+
+### Why Governance Has Its Own Pipeline Path
+
+Governance resources have different scope, permissions and readiness requirements from application, networking, observability and security resources.
+
+Giving governance its own reusable pipeline path keeps these concerns isolated while preserving the same validation, What-If, approval and deployment controls used elsewhere in the platform.
+
 ### Why Local Integration Before App Service Deployment
 
 The App Service infrastructure is currently blocked by a subscription-level quota constraint rather than an application or IaC problem.
@@ -1041,17 +1265,17 @@ This separates application integration from the App Service capacity constraint 
 
 ### Why Manual Approval
 
-Infrastructure changes can affect availability, security and cost.
+Infrastructure changes can affect availability, security, governance and cost.
 
 The approval gate creates a deliberate review point between validation and deployment.
 
 ### Why Separate Infrastructure Deployment Paths
 
-App Service, networking, observability and security have different deployment dependencies and readiness requirements.
+App Service, networking, observability, security and governance have different deployment dependencies and readiness requirements.
 
 Keeping them in independent pipeline paths means a constraint affecting one platform area does not unnecessarily block validation or deployment of another.
 
-This is demonstrated by the current App Service quota restriction: the application-platform deployment can stop at its readiness check while networking, observability and security continue independently.
+This is demonstrated by the current App Service quota restriction: the application-platform deployment can stop at its readiness check while networking, observability, security and governance continue independently.
 
 ### Why Modular Pipeline Templates
 
@@ -1071,7 +1295,7 @@ Using separate subnets provides a clearer boundary between application connectiv
 
 Application Insights is linked to a Log Analytics workspace so application telemetry can use a central observability data store.
 
-The application is now actively sending telemetry through this architecture rather than the observability resources existing only as infrastructure.
+The application is actively sending telemetry through this architecture rather than the observability resources existing only as infrastructure.
 
 This provides a foundation for KQL queries, alerts, operational investigation and correlation as additional application and platform telemetry is introduced.
 
@@ -1086,6 +1310,8 @@ A 30-day retention period provides enough history for development troubleshootin
 Some Azure deployment failures are caused by subscription or environment conditions rather than invalid infrastructure code.
 
 Readiness checks detect known environmental constraints before deployment evaluation continues, while Bicep validation independently verifies that the infrastructure definition is valid.
+
+The governance implementation reinforced this approach when `Microsoft.PolicyInsights` registration was required for the compliance workflow and was subsequently added to governance readiness validation.
 
 This produces clearer pipeline failures by distinguishing invalid infrastructure from Azure subscription or deployment-readiness constraints.
 
@@ -1105,7 +1331,7 @@ Implemented and validated:
 - Products API
 - Azure DevOps CI/CD pipeline
 - reusable Azure DevOps YAML stage templates
-- independent App Service, networking, observability and security pipeline paths
+- independent App Service, networking, observability, security and governance pipeline paths
 - Bicep infrastructure definitions
 - Bicep validation
 - Bicep What-If
@@ -1146,47 +1372,67 @@ Implemented and validated:
 - Azure Monitor failed-request alert tested with deliberately generated failed requests
 - Sev2 Azure Monitor alert successfully fired
 - Action Group successfully delivered the alert notification by email
+- custom Azure Policy definition represented through Bicep
+- Dev resource-group policy assignment represented through Bicep
+- `Environment` tag governance policy using `Audit`
+- independent governance Azure DevOps pipeline path
+- `Microsoft.Authorization` governance readiness validation
+- `Microsoft.PolicyInsights` governance readiness validation
+- Azure DevOps service connection authorized for policy deployment
+- real Azure Policy compliance evaluation completed
+- seven Dev resources evaluated by Azure Policy
+- six resources confirmed compliant
+- one non-compliant Azure-created Application Insights supporting resource identified
+- resource-level policy compliance investigated rather than blindly remediated
 
 Currently provisioned:
 
 ```text
-rg-cloudplatformlab-dev
+Azure Subscription
 |
-+-- vnet-cloudplatformlab-dev
-|   10.10.0.0/16
-|   |
-|   +-- snet-app
-|   |   10.10.1.0/24
-|   |
-|   +-- snet-private-endpoints
-|       10.10.2.0/24
++-- Custom Azure Policy Definition
+|   Audit missing Environment tag
 |
-+-- log-cloudplatformlab-dev
-|   Log Analytics Workspace
-|   30-day retention
-|
-+-- appi-cloudplatformlab-dev
-|   Application Insights
-|   linked to Log Analytics
-|   receiving application telemetry
-|   monitored for failed requests
-|
-+-- ag-cloudplatformlab-dev
-|   Azure Monitor Action Group
-|   email receiver supplied from Key Vault
-|
-+-- alert-failed-requests-dev
-|   Azure Monitor metric alert
-|   monitors Application Insights failed requests
-|
-+-- kv-cloudplatformlab-dev
-    Azure Key Vault
-    Azure RBAC
-    Soft delete
-    90-day recovery period
-    Purge protection
-    application configuration
-    AlertEmail deployment configuration
++-- rg-cloudplatformlab-dev
+    |
+    +-- Azure Policy Assignment
+    |   Audit missing Environment tag - dev
+    |
+    +-- vnet-cloudplatformlab-dev
+    |   10.10.0.0/16
+    |   |
+    |   +-- snet-app
+    |   |   10.10.1.0/24
+    |   |
+    |   +-- snet-private-endpoints
+    |       10.10.2.0/24
+    |
+    +-- log-cloudplatformlab-dev
+    |   Log Analytics Workspace
+    |   30-day retention
+    |
+    +-- appi-cloudplatformlab-dev
+    |   Application Insights
+    |   linked to Log Analytics
+    |   receiving application telemetry
+    |   monitored for failed requests
+    |
+    +-- ag-cloudplatformlab-dev
+    |   Azure Monitor Action Group
+    |   email receiver supplied from Key Vault
+    |
+    +-- alert-failed-requests-dev
+    |   Azure Monitor metric alert
+    |   monitors Application Insights failed requests
+    |
+    +-- kv-cloudplatformlab-dev
+        Azure Key Vault
+        Azure RBAC
+        Soft delete
+        90-day recovery period
+        Purge protection
+        application configuration
+        AlertEmail deployment configuration
 ```
 
 Infrastructure defined but not currently provisioned:
@@ -1199,18 +1445,22 @@ The App Service infrastructure has been validated through Bicep, but provisionin
 
 The App Service SKU is parameterised so the deployment architecture is not permanently tied to S1.
 
-The App Service quota constraint does not prevent application integration or operational monitoring work from continuing. The application currently consumes the real Dev Key Vault and Application Insights resources while running locally, and Azure Monitor operates against that real telemetry.
+The App Service quota constraint does not prevent application integration, operational monitoring or governance work from continuing.
+
+The application currently consumes the real Dev Key Vault and Application Insights resources while running locally, Azure Monitor operates against that real telemetry, and Azure Policy evaluates the deployed Dev resources independently of the application-hosting constraint.
 
 In progress:
 
 - automated application tests
 - application deployment once suitable App Service capacity is available
 - broader health monitoring
+- evaluation of appropriate treatment for Azure-created resources that fall outside project tagging conventions
 
 Planned:
 
 - App Service-to-Key-Vault authentication through system-assigned managed identity
-- Azure Policy
+- additional Azure Policy controls where justified
+- policy exemptions where justified
 - Private Endpoints
 - Private DNS
 - hub-spoke networking
@@ -1220,7 +1470,8 @@ Planned:
 - Azure API Management
 - Defender for Cloud
 - Terraform
-- landing zone/governance example
+- Management Groups
+- landing zone/governance expansion
 
 ---
 
@@ -1249,3 +1500,5 @@ Selected implementation evidence is stored in [`docs/evidence`](evidence/).
 | [Application Insights request telemetry](evidence/17-application-insights-request-telemetry.png) | Individual application requests, including the Key Vault integration endpoint, captured and correlated in Application Insights |
 | [Azure Monitor alert email fired](evidence/18-azure-monitor-alert-email-fired.png) | End-to-end operational notification from failed application request telemetry through Azure Monitor and the Action Group to email |
 | [Azure Monitor alert fired](evidence/19-azure-monitor-alert-fired.png) | Fired Azure Monitor metric alert visible in Azure and scoped to the Application Insights failed-request signal |
+| [Azure Policy Environment Tag Compliance](evidence/20-azure-policy-environment-tag-compliance.png) | Azure Policy compliance evaluation across the Dev environment, showing six compliant resources and one non-compliant resource |
+| [Azure Policy Resource-Level Compliance](evidence/21-azure-policy-resource-compliance.png) | Resource-level Azure Policy evaluation identifying the Azure-created Application Insights smart-detection Action Group as the non-compliant resource |
