@@ -34,8 +34,8 @@ resource requireEnvironmentTagPolicy 'Microsoft.Authorization/policyDefinitions@
   }
 }
 
-module policyAssignment 'assignment.bicep' = {
-  name: 'deployEnvironmentTagPolicyAssignment'
+module resourceGroupPolicyAssignment 'assignments/resource-group.bicep' = {
+  name: 'deployEnvironmentTagResourceGroupAssignment'
   scope: resourceGroup(resourceGroupName)
 
   params: {
@@ -46,5 +46,5 @@ module policyAssignment 'assignment.bicep' = {
 
 output policyDefinitionName string = requireEnvironmentTagPolicy.name
 output policyDefinitionId string = requireEnvironmentTagPolicy.id
-output policyAssignmentName string = policyAssignment.outputs.policyAssignmentName
-output policyAssignmentId string = policyAssignment.outputs.policyAssignmentId
+output resourceGroupPolicyAssignmentName string = resourceGroupPolicyAssignment.outputs.policyAssignmentName
+output resourceGroupPolicyAssignmentId string = resourceGroupPolicyAssignment.outputs.policyAssignmentId
