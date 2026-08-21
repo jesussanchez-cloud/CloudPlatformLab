@@ -1,13 +1,10 @@
-targetScope = 'tenant'
+targetScope = 'managementGroup'
 
 @description('Management Group where the reusable policy definition is created.')
 param policyDefinitionManagementGroupName string = 'mg-cloudplatformlab'
 
-@description('Management Group where the policy is assigned and inherited by child Landing Zones.')
+@description('Management Group where the policy is assigned and inherited by child landing zones.')
 param policyAssignmentManagementGroupName string = 'mg-cloudplatformlab-landing-zones'
-
-@description('Environment label used for assignment naming.')
-param environment string = 'landing-zones'
 
 module policyDefinition 'policy-definitions/management-group.bicep' = {
   name: 'deployManagementGroupPolicyDefinition'
@@ -24,7 +21,7 @@ module policyAssignment 'assignments/management-group.bicep' = {
 
   params: {
     policyDefinitionId: policyDefinition.outputs.policyDefinitionId
-    environment: environment
+    environment: 'landing-zones'
   }
 }
 

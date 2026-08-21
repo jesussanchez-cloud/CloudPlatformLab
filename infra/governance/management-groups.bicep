@@ -1,6 +1,5 @@
-targetScope = 'tenant'
+targetScope = 'managementGroup'
 
-var rootManagementGroupName = 'mg-cloudplatformlab'
 var platformManagementGroupName = 'mg-cloudplatformlab-platform'
 var connectivityManagementGroupName = 'mg-cloudplatformlab-connectivity'
 var managementManagementGroupName = 'mg-cloudplatformlab-management'
@@ -8,27 +7,29 @@ var landingZonesManagementGroupName = 'mg-cloudplatformlab-landing-zones'
 var devManagementGroupName = 'mg-cloudplatformlab-dev'
 var prodManagementGroupName = 'mg-cloudplatformlab-prod'
 
-resource cloudPlatformLab 'Microsoft.Management/managementGroups@2024-02-01-preview' = {
-  name: rootManagementGroupName
-  properties: {
-    displayName: 'CloudPlatformLab'
-  }
+resource currentManagementGroup 'Microsoft.Management/managementGroups@2024-02-01-preview' existing = {
+  scope: tenant()
+  name: managementGroup().name
 }
 
 resource platform 'Microsoft.Management/managementGroups@2024-02-01-preview' = {
+  scope: tenant()
   name: platformManagementGroupName
+
   properties: {
     displayName: 'Platform'
     details: {
       parent: {
-        id: cloudPlatformLab.id
+        id: currentManagementGroup.id
       }
     }
   }
 }
 
 resource connectivity 'Microsoft.Management/managementGroups@2024-02-01-preview' = {
+  scope: tenant()
   name: connectivityManagementGroupName
+
   properties: {
     displayName: 'Connectivity'
     details: {
@@ -40,7 +41,9 @@ resource connectivity 'Microsoft.Management/managementGroups@2024-02-01-preview'
 }
 
 resource management 'Microsoft.Management/managementGroups@2024-02-01-preview' = {
+  scope: tenant()
   name: managementManagementGroupName
+
   properties: {
     displayName: 'Management'
     details: {
@@ -52,19 +55,23 @@ resource management 'Microsoft.Management/managementGroups@2024-02-01-preview' =
 }
 
 resource landingZones 'Microsoft.Management/managementGroups@2024-02-01-preview' = {
+  scope: tenant()
   name: landingZonesManagementGroupName
+
   properties: {
     displayName: 'Landing Zones'
     details: {
       parent: {
-        id: cloudPlatformLab.id
+        id: currentManagementGroup.id
       }
     }
   }
 }
 
 resource dev 'Microsoft.Management/managementGroups@2024-02-01-preview' = {
+  scope: tenant()
   name: devManagementGroupName
+
   properties: {
     displayName: 'Dev'
     details: {
@@ -76,7 +83,9 @@ resource dev 'Microsoft.Management/managementGroups@2024-02-01-preview' = {
 }
 
 resource prod 'Microsoft.Management/managementGroups@2024-02-01-preview' = {
+  scope: tenant()
   name: prodManagementGroupName
+
   properties: {
     displayName: 'Prod'
     details: {
@@ -87,7 +96,6 @@ resource prod 'Microsoft.Management/managementGroups@2024-02-01-preview' = {
   }
 }
 
-output cloudPlatformLabManagementGroupId string = cloudPlatformLab.id
 output platformManagementGroupId string = platform.id
 output connectivityManagementGroupId string = connectivity.id
 output managementManagementGroupId string = management.id

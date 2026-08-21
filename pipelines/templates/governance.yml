@@ -148,7 +148,7 @@ stages:
           if [ "$managementState" != "Registered" ]; then
             echo "##vso[task.logissue type=error]Microsoft.Management is not registered."
             exit 1
-          fi          
+          fi
 
           echo "Checking target resource group..."
 
@@ -162,14 +162,17 @@ stages:
             exit 1
           fi
 
-          echo "Checking Management Group access..."
+          echo "Checking bootstrap Management Group access..."
 
-          if ! az account management-group list --no-register --output none; then
-            echo "##vso[task.logissue type=error]The service connection cannot access Management Groups."
+          if ! az account management-group show \
+            --name mg-cloudplatformlab \
+            --no-register \
+            --output none; then
+            echo "##vso[task.logissue type=error]The service connection cannot access mg-cloudplatformlab."
             exit 1
           fi
 
-          echo "Management Group access check passed."
+          echo "Bootstrap Management Group access check passed."
           echo "Governance readiness checks passed."
 
 
@@ -198,7 +201,8 @@ stages:
         inlineScript: |
           set -euo pipefail
 
-          az deployment tenant what-if \
+          az deployment mg what-if \
+            --management-group-id mg-cloudplatformlab \
             --location ${{ parameters.location }} \
             --template-file infra/governance/management-groups.bicep
 
@@ -234,7 +238,8 @@ stages:
               inlineScript: |
                 set -euo pipefail
 
-                az deployment tenant create \
+                az deployment mg create \
+                  --management-group-id mg-cloudplatformlab \
                   --location ${{ parameters.location }} \
                   --template-file infra/governance/management-groups.bicep \
                   --name cloudplatformlab-management-groups
@@ -265,7 +270,8 @@ stages:
         inlineScript: |
           set -euo pipefail
 
-          az deployment tenant what-if \
+          az deployment mg what-if \
+            --management-group-id mg-cloudplatformlab \
             --location ${{ parameters.location }} \
             --template-file infra/governance/management-group-governance.bicep
 
@@ -301,7 +307,8 @@ stages:
               inlineScript: |
                 set -euo pipefail
 
-                az deployment tenant create \
+                az deployment mg create \
+                  --management-group-id mg-cloudplatformlab \
                   --location ${{ parameters.location }} \
                   --template-file infra/governance/management-group-governance.bicep \
                   --name cloudplatformlab-management-group-governance
