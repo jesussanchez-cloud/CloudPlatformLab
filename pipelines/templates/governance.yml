@@ -136,6 +136,20 @@ stages:
             exit 1
           fi
 
+          echo "Checking Microsoft.Management registration..."
+
+          managementState=$(az provider show \
+            --namespace Microsoft.Management \
+            --query registrationState \
+            --output tsv)
+
+          echo "Microsoft.Management registration state: $managementState"
+
+          if [ "$managementState" != "Registered" ]; then
+            echo "##vso[task.logissue type=error]Microsoft.Management is not registered."
+            exit 1
+          fi          
+
           echo "Checking target resource group..."
 
           resourceGroupExists=$(az group exists \
@@ -150,7 +164,7 @@ stages:
 
           echo "Checking Management Group access..."
 
-          if ! az account management-group list --output none; then
+          if ! az account management-group list --no-register --output none; then
             echo "##vso[task.logissue type=error]The service connection cannot access Management Groups."
             exit 1
           fi
