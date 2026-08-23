@@ -11,7 +11,7 @@ module policyDefinition 'policy-definitions/management-group.bicep' = {
   scope: managementGroup(policyDefinitionManagementGroupName)
 
   params: {
-    policyDefinitionName: 'require-environment-tag'
+    policyDefinitionName: 'env-tag'
   }
 }
 
