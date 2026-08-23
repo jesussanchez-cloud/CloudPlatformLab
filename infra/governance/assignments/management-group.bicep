@@ -6,7 +6,7 @@ param policyDefinitionId string
 @description('Environment name used for naming.')
 param environment string = 'dev'
 
-var policyAssignmentName = 'require-environment-tag-${environment}'
+var policyAssignmentName = 'env-tag-${environment}'
 
 resource environmentTagAssignment 'Microsoft.Authorization/policyAssignments@2024-04-01' = {
   name: policyAssignmentName
