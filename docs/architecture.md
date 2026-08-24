@@ -82,13 +82,41 @@ Azure Monitor alerting has also been implemented. Failed application requests ar
 
 This monitoring path has been tested end-to-end by deliberately generating failed application requests and confirming that the Azure Monitor alert fired and the Action Group delivered the notification.
 
-The platform now also includes an initial governance implementation using Azure Policy.
+The platform now also includes a deployed Management Group landing-zone hierarchy and Azure Policy governance.
 
-A custom policy audits resources in the Dev resource group for the required `Environment` tag. The policy definition and assignment are represented through Bicep and integrated into an independent governance pipeline path.
+The CloudPlatformLab subscription is placed beneath the `Dev` Management Group, while the required `Environment` tag policy is assigned at the `Landing Zones` Management Group.
 
-Azure Policy compliance evaluation has been validated against the real Dev environment. Seven resources were evaluated, with six compliant and one non-compliant resource identified.
+This means governance is inherited through:
 
-The non-compliant resource is an Application Insights smart-detection Action Group created by Azure rather than one of the project's explicitly Bicep-managed resources. The result has deliberately not been manually changed simply to obtain 100% compliance. It demonstrates that policy findings require investigation and an appropriate remediation or exemption decision rather than automatic modification.
+```text
+Landing Zones
+     |
+     v
+Dev
+     |
+     v
+CloudPlatformLab subscription
+     |
+     v
+Dev workload resources
+```
+
+The previous direct resource-group policy assignment was removed after Management Group inheritance was validated, avoiding duplicate governance at lower scopes.
+
+Azure Policy compliance has been validated against the real Dev environment through the inherited assignment.
+
+The latest evaluation showed:
+
+```text
+Resources evaluated: 8
+Compliant:           6
+Non-compliant:       2
+Compliance:          75%
+```
+
+The non-compliant findings include Azure-created supporting resources rather than resources deliberately created without the project tagging standard.
+
+These findings have deliberately not been changed simply to produce a 100% compliance score. They demonstrate that governance findings require investigation and an appropriate remediation, scope-refinement or exemption decision.
 
 The App Service infrastructure follows an independent deployment path. Its Bicep definition is valid, but provisioning using the currently selected S1 SKU is blocked by the subscription's App Service quota.
 
@@ -148,8 +176,14 @@ infra/
 |   +-- main.bicep
 |
 +-- governance/
-    +-- main.bicep
-    +-- assignment.bicep
+    +-- management-group-hierarchy.bicep
+    +-- landing-zone-policy.bicep
+    |
+    +-- policy-definitions/
+    |   +-- environment-tag-policy.bicep
+    |
+    +-- assignments/
+        +-- environment-tag-assignment.bicep
 ```
 
 The App Service template defines:
@@ -189,9 +223,12 @@ The security template defines:
 
 The governance templates define:
 
-- custom Azure Policy definition
-- audit policy for the required `Environment` tag
-- policy assignment targeting the Dev resource group
+- CloudPlatformLab Management Group hierarchy
+- `Platform`, `Connectivity`, `Management`, `Landing Zones`, `Dev` and `Prod` Management Groups
+- custom Azure Policy definition for the required `Environment` tag
+- policy assignment at the `Landing Zones` Management Group
+- inherited governance for descendant Management Groups and subscriptions
+- separation between reusable policy definition and scope-specific assignment
 
 Most workload infrastructure is deployed into:
 
@@ -205,7 +242,9 @@ Region:
 UK South
 ```
 
-Governance requires a broader deployment model because Azure Policy definitions exist above individual resource-group resources. The governance Bicep therefore separates the policy definition from the resource-group-scoped assignment.
+Governance is intentionally applied above the individual resource-group layer.
+
+The Management Group hierarchy establishes governance boundaries while the reusable policy definition and Management Group assignment allow policy inheritance rather than duplicating the same assignment at every subscription or resource group.
 
 Separating infrastructure by platform concern allows each area to be validated, deployed and evolved independently while remaining managed through the same repository and CI/CD workflow.
 
@@ -436,108 +475,127 @@ No application secret values, notification email addresses or Azure connection s
 
 ## Governance Architecture
 
-The Dev environment now includes an initial Azure Policy governance layer.
+CloudPlatformLab implements a Management Group-based governance model that separates shared platform concerns from workload landing zones.
 
-The first implemented governance control audits resources for the required `Environment` tag.
-
-```text
-Azure DevOps
-     |
-     v
-Governance Pipeline
-     |
-     +-- Bicep Validation
-     |
-     +-- Provider Readiness
-     |      |
-     |      +-- Microsoft.Authorization
-     |      +-- Microsoft.PolicyInsights
-     |
-     +-- What-If
-     |
-     +-- Manual Approval
-     |
-     v
-Azure Policy Definition
-     |
-     v
-Policy Assignment
-     |
-     v
-rg-cloudplatformlab-dev
-     |
-     v
-Resource Compliance Evaluation
-```
-
-The custom policy uses an `Audit` effect.
-
-Resources that do not contain the required `Environment` tag are reported as non-compliant without the policy modifying or blocking those resources.
-
-This is intentional for the first governance implementation. It allows the platform to observe the existing environment and understand the effect of a governance rule before introducing enforcement.
-
-### Policy Scope
-
-The policy definition and assignment are separated because they operate at different Azure scopes.
-
-The policy definition establishes the reusable governance rule, while the assignment applies that rule to the Dev resource group.
-
-The implemented assignment targets:
+The deployed hierarchy is:
 
 ```text
-rg-cloudplatformlab-dev
+Tenant Root Group
+|
++-- CloudPlatformLab
+    |
+    +-- Platform
+    |   |
+    |   +-- Connectivity
+    |   +-- Management
+    |
+    +-- Landing Zones
+        |
+        +-- Dev
+        |   |
+        |   +-- CloudPlatformLab subscription
+        |
+        +-- Prod
 ```
 
-This keeps the initial governance control tightly scoped to the project's development environment.
+The hierarchy is represented through Bicep and deployed through the dedicated governance pipeline.
+
+The CloudPlatformLab subscription is placed beneath the `Dev` Management Group, allowing governance assigned higher in the hierarchy to be inherited by the development subscription and its resources.
+
+### Policy Scope and Inheritance
+
+The first implemented governance control audits Azure resources for the required `Environment` tag.
+
+The custom policy definition is separated from its assignment so that the governance rule can be reused independently of the scope at which it is applied.
+
+The policy is assigned at the `Landing Zones` Management Group:
+
+```text
+Landing Zones
+|
++-- Environment tag policy assignment
+|
++-- Dev
+|   |
+|   +-- CloudPlatformLab subscription
+|       |
+|       +-- rg-cloudplatformlab-dev
+|           |
+|           +-- Azure resources
+|
++-- Prod
+```
+
+This allows the policy to flow through the Management Group hierarchy rather than duplicating the same assignment at individual resource-group or subscription scope.
+
+The previous direct assignment to `rg-cloudplatformlab-dev` was removed after Management Group inheritance was validated.
+
+### Subscription Placement and Least Privilege
+
+Subscription placement is intentionally treated separately from the repeatable Azure DevOps governance deployment.
+
+Moving a subscription between Management Groups requires broader permissions than normal governance deployment.
+
+The project therefore separates:
+
+```text
+Privileged platform/bootstrap operation
+|
++-- Subscription placement
+
+Repeatable Azure DevOps governance
+|
++-- Management Group hierarchy
++-- Policy definition
++-- Policy assignment
++-- Validation
++-- What-If
++-- Controlled deployment
+```
+
+This avoids escalating the normal deployment identity simply to automate an infrequent administrative operation.
 
 ### Compliance Evaluation
 
-Azure Policy compliance evaluation has been successfully executed against the deployed Dev environment.
-
-The observed compliance state was:
+Azure Policy compliance has been successfully evaluated through the inherited `Landing Zones` assignment.
 
 ```text
-Resources evaluated: 7
+Resources evaluated: 8
 Compliant:           6
-Non-compliant:       1
-Compliance:          86%
+Non-compliant:       2
+Compliance:          75%
 ```
 
-The non-compliant resource was:
+The non-compliant results include Azure-created/supporting resources including:
 
 ```text
 application insights smart detection
-Type: Microsoft.Insights/actionGroups
+
+NetworkWatcher_uksouth
 ```
 
-This Action Group is an Azure-created Application Insights supporting resource rather than one explicitly created by the project's Bicep templates.
+The findings have deliberately not been changed simply to produce a 100% compliance score.
 
-The finding has deliberately not been manually remediated simply to make the compliance score 100%.
-
-Instead, it demonstrates an important governance principle: a non-compliant result should be investigated to determine whether the resource should be changed, excluded by policy design, or covered by a justified policy exemption.
-
-This provides a more realistic governance workflow:
+Instead, they demonstrate:
 
 ```text
-Policy
-   |
-   v
+Inherited Policy
+      |
+      v
 Compliance Evaluation
-   |
-   v
+      |
+      v
 Non-Compliant Resource
-   |
-   v
+      |
+      v
 Investigation
-   |
-   +--> Remediate where appropriate
-   |
-   +--> Refine policy scope where appropriate
-   |
-   +--> Use justified exemption where appropriate
+      |
+      +--> Remediate where appropriate
+      |
+      +--> Refine policy scope where appropriate
+      |
+      +--> Use a justified exemption where appropriate
 ```
-
-A future governance increment can formalise the treatment of Azure-managed supporting resources rather than modifying them manually.
 
 ### Governance Pipeline
 
@@ -547,23 +605,51 @@ Governance has its own reusable Azure DevOps pipeline template:
 pipelines/templates/governance.yml
 ```
 
-The governance readiness checks validate:
+The cleaned governance path focuses on:
 
-- `Microsoft.Authorization` resource-provider registration
-- `Microsoft.PolicyInsights` resource-provider registration
-- required deployment scope/environment prerequisites
+```text
+Management Group Hierarchy
+          +
+Landing Zone Policy
+```
 
-`Microsoft.PolicyInsights` is required for Azure Policy compliance evaluation and was added to the readiness checks after validating the real compliance workflow.
+Obsolete subscription-governance deployment stages and the old resource-group policy assignment were removed after the Management Group model became the authoritative governance design.
 
-The service connection has the Azure permissions required to deploy the governance resources, including `Resource Policy Contributor` for policy operations.
+The governance path follows:
 
-This keeps policy deployment controlled through the same identity-based CI/CD model as the other platform domains.
+```text
+Bicep Validation
+      |
+      v
+Governance Readiness
+      |
+      v
+What-If
+      |
+      v
+Manual Approval
+      |
+      v
+Deployment
+```
+
+Governance readiness validates:
+
+- `Microsoft.Authorization`
+- `Microsoft.PolicyInsights`
+- `Microsoft.Management`
+- Management Group access
+- required deployment prerequisites
+
+The Azure DevOps service connection authenticates through Workload Identity Federation.
+
+The feature-branch pipeline was run again after the governance cleanup and all governance stages and deployments completed successfully.
 
 ---
 
 ## Application Integration Architecture
 
-The runtime and operational integrations connect the application to the deployed security and observability capabilities, while Azure Policy evaluates the surrounding platform resources.
+The runtime and operational integrations connect the application to the deployed security and observability capabilities, while Azure Policy evaluates the surrounding platform resources through inherited Management Group governance.
 
 ```text
                          ASP.NET Core Application
@@ -593,17 +679,28 @@ The runtime and operational integrations connect the application to the deployed
                        Azure Policy Governance
                                   |
                                   v
+                    Landing Zones Management Group
+                                  |
+                                  v
+                          Inherited by Dev
+                                  |
+                                  v
+                     CloudPlatformLab Subscription
+                                  |
+                                  v
                      Dev Resource Evaluation
                                   |
                                   v
                       Compliance / Findings
 ```
 
-The workload actively consumes the identity/security and observability capabilities provided by the platform, while the governance layer independently evaluates the Azure resources against defined policy requirements.
+The workload actively consumes the identity/security and observability capabilities provided by the platform, while the governance layer independently evaluates Azure resources against inherited policy requirements.
 
 The current application integration is tested locally because App Service provisioning remains blocked by subscription quota.
 
 When App Service becomes deployable, the developer identity used by `DefaultAzureCredential` locally can be replaced by the App Service system-assigned managed identity while preserving the same application authentication model.
+
+---
 
 ## Deployment Architecture
 
@@ -682,7 +779,9 @@ The pipeline identity is authorized through Azure RBAC and uses the `Key Vault S
 
 The email value is passed to the observability Bicep deployment as a secure parameter rather than being hardcoded in the repository.
 
-The governance pipeline deploys and validates the Azure Policy governance layer through the same controlled CI/CD approach used by the other infrastructure domains.
+The governance pipeline deploys and validates the Management Group hierarchy and inherited Azure Policy governance through the same controlled CI/CD approach used by the other infrastructure domains.
+
+The governance pipeline was cleaned after the Management Group implementation became authoritative. Obsolete subscription-governance stages and the previous direct resource-group policy assignment were removed.
 
 ---
 
@@ -724,11 +823,13 @@ Governance readiness currently validates:
 
 - `Microsoft.Authorization` resource provider registration
 - `Microsoft.PolicyInsights` resource provider registration
+- `Microsoft.Management` resource provider registration
+- Management Group access
 - required deployment scope/environment prerequisites
 
 Readiness checks are intentionally separated from Bicep validation.
 
-Bicep validation verifies the infrastructure definition, while readiness checks detect known subscription or environmental conditions that could prevent a valid template from being deployed or evaluated correctly.
+Bicep validation verifies the infrastructure definition, while readiness checks detect known subscription, permission or environmental conditions that could prevent a valid template from being deployed or evaluated correctly.
 
 This distinction produces clearer pipeline failures and prevents known environmental constraints from being confused with invalid infrastructure code.
 
@@ -761,11 +862,14 @@ Microsoft.KeyVault
 Governance
 Microsoft.Authorization
 Microsoft.PolicyInsights
+Microsoft.Management
 ```
 
-`Microsoft.PolicyInsights` supports Azure Policy compliance evaluation and was added to the governance readiness checks after validating the compliance workflow against the real Dev environment.
+`Microsoft.PolicyInsights` supports Azure Policy compliance evaluation.
 
-This keeps subscription-level platform preparation separate from workload-level Infrastructure as Code.
+`Microsoft.Management` supports the Management Group governance layer.
+
+This keeps subscription-level and platform-level preparation separate from workload-level Infrastructure as Code.
 
 New resource providers will be introduced and validated as additional platform capabilities are implemented rather than registering unrelated providers in advance.
 
@@ -846,9 +950,11 @@ Azure Key Vault
 AlertEmail
 ```
 
-For governance operations, the service connection identity is granted the Azure permissions required to manage policy resources, including `Resource Policy Contributor`.
+For governance operations, the service connection identity is granted the Azure permissions required to manage the implemented policy and Management Group resources.
 
-This extends the same identity-first deployment model to governance rather than introducing a separate credential mechanism.
+Subscription placement is intentionally separated from the normal repeatable deployment path because moving subscriptions between Management Groups requires broader permissions than the standard governance deployment should retain.
+
+This extends the same identity-first and least-privilege deployment model to governance rather than introducing a separate credential mechanism.
 
 ---
 
@@ -871,8 +977,10 @@ Current security controls include:
 - monitoring notification email stored in Key Vault rather than source control
 - observability pipeline retrieves deployment-time configuration from Key Vault
 - Azure RBAC
-- `Resource Policy Contributor` permissions for governance deployment
 - Azure Policy compliance auditing
+- Management Group governance hierarchy
+- inherited policy assignment
+- separation of privileged subscription placement from repeatable governance deployment
 - controlled Azure DevOps service connection
 - manual approval before infrastructure deployment
 - deployment readiness checks
@@ -888,6 +996,7 @@ Planned security improvements include:
 - App Service-to-Key-Vault access through system-assigned managed identity
 - Private Endpoints
 - Private DNS
+- network segmentation controls where appropriate
 - Defender for Cloud
 - tighter RBAC where appropriate
 
@@ -903,6 +1012,20 @@ Development workload resources are grouped under:
 rg-cloudplatformlab-dev
 ```
 
+The subscription containing those resources is organised beneath the `Dev` Management Group in the CloudPlatformLab landing-zone hierarchy.
+
+```text
+CloudPlatformLab
+|
++-- Landing Zones
+    |
+    +-- Dev
+        |
+        +-- CloudPlatformLab subscription
+            |
+            +-- rg-cloudplatformlab-dev
+```
+
 Resources are tagged to support ownership, governance and cost tracking.
 
 Current standard tags include:
@@ -916,15 +1039,26 @@ CostCenter    = CloudPlatformLab
 
 Tagging is no longer represented only as a convention in the Bicep templates.
 
-Azure Policy now evaluates the Dev resource group for the required `Environment` tag.
+Azure Policy evaluates the Dev environment through an inherited assignment at the `Landing Zones` Management Group.
 
-The first compliance evaluation identified six compliant resources and one non-compliant resource.
+The latest compliance evaluation identified:
 
-The non-compliant resource was investigated rather than automatically modified. It was identified as an Azure-created Application Insights smart-detection Action Group.
+```text
+Resources evaluated: 8
+Compliant:           6
+Non-compliant:       2
+Compliance:          75%
+```
 
-This demonstrates the distinction between defining a governance standard and blindly forcing every discovered resource into compliance.
+The non-compliant resources were investigated rather than automatically modified.
 
-Future governance work can extend the current audit model with additional policies, policy exemptions where justified, stronger enforcement where appropriate and higher-level governance through Management Groups.
+The findings include Azure-created/supporting resources, demonstrating the distinction between defining a governance standard and blindly forcing every discovered resource into compliance.
+
+The previous direct resource-group policy assignment was removed once Management Group inheritance was validated.
+
+This leaves the higher-level `Landing Zones` assignment as the intentional governance source for the workload hierarchy.
+
+Future governance work can extend the current audit model with additional policies, justified exemptions and stronger enforcement where appropriate. The Management Group landing-zone foundation itself is now implemented.
 
 ---
 
@@ -973,7 +1107,7 @@ The application is generating real telemetry, allowing ingestion volume and rete
 
 Monitoring resources are kept intentionally small and focused. The current alerting implementation uses an existing Application Insights metric and a single project Action Group rather than introducing unnecessary monitoring infrastructure.
 
-Azure Policy adds governance capability without requiring the project to introduce unnecessary workload infrastructure simply for demonstration purposes.
+Azure Policy and Management Groups add governance capability without requiring the project to introduce unnecessary workload infrastructure simply for demonstration purposes.
 
 Because the environment is defined as code, resources can be removed and recreated later.
 
@@ -987,135 +1121,162 @@ The independent deployment architecture allows useful platform, governance and a
 
 The deployed networking, observability, security and governance foundations, together with the application integrations, operational alerting and defined App Service workload, form the initial platform baseline.
 
-The longer-term target architecture includes the following areas.
+The remaining target architecture focuses on a small number of high-value platform-engineering capabilities rather than continuously adding Azure services.
 
 ### Identity and Security
 
-- Microsoft Entra ID
-- Managed Identities
+Implemented:
+
+- Microsoft Entra ID authentication
+- Workload Identity Federation
 - Azure Key Vault
 - Azure RBAC
-- Defender for Cloud
+- system-assigned managed identity defined for App Service
+
+Remaining:
+
+- App Service-to-Key-Vault access through managed identity
 - Private Endpoints
+- private service access
+- Defender for Cloud where appropriate
 
 ### Networking
+
+Implemented:
+
+- Dev VNet
+- application subnet
+- dedicated Private Endpoint subnet
+
+Remaining:
 
 - hub-spoke virtual network architecture
 - VNet peering
 - Private DNS
 - Private Endpoints
 - private connectivity to Azure platform services
-- workload subnet segmentation
+- network segmentation controls where appropriate
 
 ### Application Platform
 
+Defined:
+
 - Azure App Service
 - deployment slots
+- system-assigned managed identity
+- HTTPS-only configuration
+- TLS 1.2 minimum
+
+Remaining:
+
+- deployment when suitable App Service capacity is available
 - health checks
-- controlled promotion to production
-
-### Data
-
-- Azure Cosmos DB
-- Azure SQL where appropriate
-- Azure Storage
-
-### Messaging
-
-- Azure Service Bus
-- Azure Event Grid
-
-### API Platform
-
-- Azure API Management
-- API policies
-- throttling / rate limiting
-- authentication and authorization
-- API versioning
-- API observability
-
-### Containers
-
-- Azure Container Registry
-- Azure Container Apps
-- managed identity
-- container deployment through CI/CD
-- container observability and scaling
+- controlled promotion where appropriate
 
 ### Observability
+
+Implemented:
 
 - Azure Monitor
 - Application Insights
 - Log Analytics
 - metric alerts
 - Action Groups
-- health monitoring
-- additional operational alerting where justified
+- real application telemetry
+- end-to-end failed-request alerting
+
+Remaining:
+
+- broader health monitoring where justified
 
 ### Infrastructure and DevOps
 
+Implemented:
+
 - Bicep
-- Terraform
 - Azure DevOps
 - Azure Repos
 - GitHub
 - reusable pipeline templates
 - CI/CD
-- automated testing
+- validation
+- What-If
+- approval gates
+- readiness checks
+
+Remaining:
+
+- Terraform implementation
+- automated application tests
 
 ### Governance and FinOps
 
+Implemented:
+
+- Management Group hierarchy
+- landing-zone structure
 - Azure Policy
-- policy assignments
+- inherited policy assignment
 - policy compliance evaluation
-- policy exemptions where justified
-- Management Groups
 - Azure RBAC
 - resource tagging
-- Azure Cost Management
-- budgets and alerts
+- cost-aware deployment
 - non-production cost controls
+
+Remaining:
+
+- additional policy controls only where justified
+- policy exemptions where justified
+- final governance documentation and ADRs
 
 ---
 
-## Landing Zone Direction
+## Landing Zone Implementation
 
-A later phase of the project will extend the current workload-level governance into a broader platform governance model.
-
-The target structure is roughly:
+The project now includes a working Management Group hierarchy representing a small enterprise landing-zone model.
 
 ```text
-Tenant Root
-     |
-     +-- CloudPlatformLab
-           |
-           +-- Platform
-           |     |
-           |     +-- Connectivity
-           |     +-- Management
-           |
-           +-- Landing Zones
-                 |
-                 +-- Dev
-                 +-- Prod
+Tenant Root Group
+|
++-- CloudPlatformLab
+    |
+    +-- Platform
+    |   |
+    |   +-- Connectivity
+    |   +-- Management
+    |
+    +-- Landing Zones
+        |
+        +-- Dev
+        |   |
+        |   +-- CloudPlatformLab subscription
+        |
+        +-- Prod
 ```
 
-This will be used to explore:
+This structure separates shared platform concerns from workload landing zones and provides governance scopes above individual subscriptions and resource groups.
 
-- Management Groups
+The `Landing Zones` Management Group is the current policy-assignment boundary.
+
+The required `Environment` tag policy is assigned there and inherited by the `Dev` hierarchy, the CloudPlatformLab subscription and its workload resources.
+
+The implementation demonstrates:
+
+- Management Group hierarchy
 - subscription organisation
-- Policy inheritance
-- RBAC
-- governance
-- networking
-- cost controls
-- platform security
+- policy inheritance
+- Management Group policy scope
+- reusable policy definitions
+- separation of policy definition and assignment
+- Azure RBAC
+- least-privilege CI/CD boundaries
+- controlled governance deployment
+- Azure Policy compliance evaluation
+- architecture that can scale to additional subscriptions without duplicating assignments
 
-The current resource-group-level Azure Policy implementation provides a practical starting point for that later governance model.
+The project deliberately keeps the landing-zone implementation small.
 
-The goal is not to reproduce a large enterprise environment at unnecessary cost.
-
-Where appropriate, a smaller working implementation will be used together with documentation showing how the design would scale.
+The objective is not to reproduce the size of a large enterprise Azure estate. The project implements the architectural pattern at a practical scale and documents how the same design could expand.
 
 ---
 
@@ -1229,25 +1390,49 @@ The first policy uses the `Audit` effect rather than immediately denying deploym
 
 Audit mode allows the project to observe how the rule behaves against the existing environment before introducing enforcement.
 
-This has already demonstrated its value by identifying an Azure-created supporting resource that does not satisfy the tagging standard.
+This has already demonstrated its value by identifying Azure-created supporting resources that do not satisfy the tagging standard.
 
-Introducing enforcement without first understanding cases like this could create unnecessary deployment failures.
+Introducing enforcement without first understanding cases like these could create unnecessary deployment failures.
 
 ### Why Investigate Non-Compliance Instead of Forcing 100%
 
 Policy compliance is not simply a score to maximize.
 
-The non-compliant Application Insights smart-detection Action Group was created by Azure rather than explicitly through the project's Bicep templates.
+The inherited policy currently reports two non-compliant Azure-created/supporting resources.
 
-The finding is therefore being treated as a governance decision rather than manually changing the resource solely to produce a green compliance dashboard.
+The findings are therefore treated as governance decisions rather than manually changing resources solely to produce a green compliance dashboard.
 
-The appropriate long-term treatment may be remediation, refinement of policy scope or a documented policy exemption.
+The appropriate treatment can be remediation, refinement of policy scope or a documented policy exemption.
 
 ### Why Separate Policy Definition and Assignment
 
 The policy definition describes the reusable governance rule, while the assignment determines where that rule applies.
 
-Separating these concerns allows the same policy definition to be applied to different scopes or environments later without duplicating the policy logic.
+Separating these concerns allows the same policy definition to be applied at different scopes or environments without duplicating policy logic.
+
+### Why Assign Policy at the Landing Zones Management Group
+
+The tagging standard applies to workload landing zones rather than to one individual resource group.
+
+Assigning the policy at `Landing Zones` establishes the governance rule once and allows it to be inherited by child Management Groups and subscriptions.
+
+This better represents an enterprise governance model than duplicating the same policy assignment at individual resource groups.
+
+### Why Management Groups
+
+Resource groups organise resources inside a subscription, but they do not provide a governance hierarchy above subscriptions.
+
+Management Groups allow CloudPlatformLab to demonstrate platform-level organisation and policy inheritance.
+
+The hierarchy separates shared platform concerns from workload landing zones and creates a structure that can scale to additional subscriptions without redesigning the governance model.
+
+### Why Separate Subscription Placement from the Governance Pipeline
+
+Moving a subscription between Management Groups requires broader permissions than those needed for normal repeatable governance deployment.
+
+Subscription placement is therefore treated as a privileged bootstrap or administrative operation rather than granting the standard pipeline identity unnecessary permanent privilege.
+
+This keeps the repeatable CI/CD identity closer to least privilege.
 
 ### Why Governance Has Its Own Pipeline Path
 
@@ -1307,11 +1492,11 @@ A 30-day retention period provides enough history for development troubleshootin
 
 ### Why Readiness Checks Before What-If
 
-Some Azure deployment failures are caused by subscription or environment conditions rather than invalid infrastructure code.
+Some Azure deployment failures are caused by subscription, permission or environment conditions rather than invalid infrastructure code.
 
 Readiness checks detect known environmental constraints before deployment evaluation continues, while Bicep validation independently verifies that the infrastructure definition is valid.
 
-The governance implementation reinforced this approach when `Microsoft.PolicyInsights` registration was required for the compliance workflow and was subsequently added to governance readiness validation.
+The governance implementation reinforced this approach as Management Group and Azure Policy operations introduced scope and provider requirements distinct from workload deployments.
 
 This produces clearer pipeline failures by distinguishing invalid infrastructure from Azure subscription or deployment-readiness constraints.
 
@@ -1372,68 +1557,94 @@ Implemented and validated:
 - Azure Monitor failed-request alert tested with deliberately generated failed requests
 - Sev2 Azure Monitor alert successfully fired
 - Action Group successfully delivered the alert notification by email
-- custom Azure Policy definition represented through Bicep
-- Dev resource-group policy assignment represented through Bicep
-- `Environment` tag governance policy using `Audit`
+- CloudPlatformLab Management Group landing-zone hierarchy deployed
+- `Platform` Management Group deployed
+- `Connectivity` Management Group deployed beneath `Platform`
+- `Management` Management Group deployed beneath `Platform`
+- `Landing Zones` Management Group deployed
+- `Dev` Management Group deployed beneath `Landing Zones`
+- `Prod` Management Group deployed beneath `Landing Zones`
+- CloudPlatformLab subscription placed beneath `Dev`
+- custom `Environment` tag Azure Policy represented through Bicep
+- policy assignment deployed at the `Landing Zones` Management Group
+- policy inheritance validated at subscription scope
+- obsolete direct Dev resource-group policy assignment removed
+- governance Bicep structure cleaned after Management Group implementation
+- obsolete subscription-governance pipeline stages removed
 - independent governance Azure DevOps pipeline path
 - `Microsoft.Authorization` governance readiness validation
 - `Microsoft.PolicyInsights` governance readiness validation
-- Azure DevOps service connection authorized for policy deployment
-- real Azure Policy compliance evaluation completed
-- seven Dev resources evaluated by Azure Policy
+- `Microsoft.Management` governance readiness validation
+- Azure DevOps service connection authorized for implemented governance deployment
+- Management Group hierarchy deployed through the controlled pipeline
+- Landing Zone policy deployed through the controlled pipeline
+- governance pipeline successfully rerun after cleanup
+- real inherited Azure Policy compliance evaluation completed
+- eight resources evaluated
 - six resources confirmed compliant
-- one non-compliant Azure-created Application Insights supporting resource identified
+- two non-compliant Azure-created/supporting resources identified
 - resource-level policy compliance investigated rather than blindly remediated
 
 Currently provisioned:
 
 ```text
-Azure Subscription
+Tenant Root Group
 |
-+-- Custom Azure Policy Definition
-|   Audit missing Environment tag
-|
-+-- rg-cloudplatformlab-dev
++-- CloudPlatformLab
     |
-    +-- Azure Policy Assignment
-    |   Audit missing Environment tag - dev
-    |
-    +-- vnet-cloudplatformlab-dev
-    |   10.10.0.0/16
+    +-- Platform
     |   |
-    |   +-- snet-app
-    |   |   10.10.1.0/24
-    |   |
-    |   +-- snet-private-endpoints
-    |       10.10.2.0/24
+    |   +-- Connectivity
+    |   +-- Management
     |
-    +-- log-cloudplatformlab-dev
-    |   Log Analytics Workspace
-    |   30-day retention
-    |
-    +-- appi-cloudplatformlab-dev
-    |   Application Insights
-    |   linked to Log Analytics
-    |   receiving application telemetry
-    |   monitored for failed requests
-    |
-    +-- ag-cloudplatformlab-dev
-    |   Azure Monitor Action Group
-    |   email receiver supplied from Key Vault
-    |
-    +-- alert-failed-requests-dev
-    |   Azure Monitor metric alert
-    |   monitors Application Insights failed requests
-    |
-    +-- kv-cloudplatformlab-dev
-        Azure Key Vault
-        Azure RBAC
-        Soft delete
-        90-day recovery period
-        Purge protection
-        application configuration
-        AlertEmail deployment configuration
+    +-- Landing Zones
+        |
+        +-- Environment tag policy assignment
+        |
+        +-- Dev
+        |   |
+        |   +-- CloudPlatformLab subscription
+        |       |
+        |       +-- rg-cloudplatformlab-dev
+        |           |
+        |           +-- vnet-cloudplatformlab-dev
+        |           |   10.10.0.0/16
+        |           |   |
+        |           |   +-- snet-app
+        |           |   |   10.10.1.0/24
+        |           |   |
+        |           |   +-- snet-private-endpoints
+        |           |       10.10.2.0/24
+        |           |
+        |           +-- log-cloudplatformlab-dev
+        |           |   Log Analytics Workspace
+        |           |   30-day retention
+        |           |
+        |           +-- appi-cloudplatformlab-dev
+        |           |   Application Insights
+        |           |   linked to Log Analytics
+        |           |   receiving application telemetry
+        |           |   monitored for failed requests
+        |           |
+        |           +-- ag-cloudplatformlab-dev
+        |           |   Azure Monitor Action Group
+        |           |
+        |           +-- alert-failed-requests-dev
+        |           |   Azure Monitor metric alert
+        |           |
+        |           +-- kv-cloudplatformlab-dev
+        |               Azure Key Vault
+        |               Azure RBAC
+        |               Soft delete
+        |               90-day recovery period
+        |               Purge protection
+        |
+        +-- Prod
 ```
+
+A reusable custom Azure Policy definition audits resources missing the required `Environment` tag.
+
+The policy is assigned at the `Landing Zones` Management Group and inherited by the Dev hierarchy rather than being directly assigned to `rg-cloudplatformlab-dev`.
 
 Infrastructure defined but not currently provisioned:
 
@@ -1445,33 +1656,34 @@ The App Service infrastructure has been validated through Bicep, but provisionin
 
 The App Service SKU is parameterised so the deployment architecture is not permanently tied to S1.
 
-The App Service quota constraint does not prevent application integration, operational monitoring or governance work from continuing.
+The App Service quota constraint does not prevent application integration, operational monitoring, networking or governance work from continuing.
 
-The application currently consumes the real Dev Key Vault and Application Insights resources while running locally, Azure Monitor operates against that real telemetry, and Azure Policy evaluates the deployed Dev resources independently of the application-hosting constraint.
+The application currently consumes the real Dev Key Vault and Application Insights resources while running locally, Azure Monitor operates against that real telemetry, and inherited Azure Policy evaluates the deployed Dev resources independently of the application-hosting constraint.
 
 In progress:
 
+- repository cleanup and final documentation alignment
 - automated application tests
 - application deployment once suitable App Service capacity is available
-- broader health monitoring
-- evaluation of appropriate treatment for Azure-created resources that fall outside project tagging conventions
+- broader health monitoring where justified
+- treatment of Azure-created resources that fall outside project tagging conventions
 
-Planned:
+### Remaining Portfolio Build Work
 
-- App Service-to-Key-Vault authentication through system-assigned managed identity
-- additional Azure Policy controls where justified
-- policy exemptions where justified
-- Private Endpoints
-- Private DNS
-- hub-spoke networking
-- Cosmos DB application persistence
-- Azure Container Registry
-- Azure Container Apps
-- Azure API Management
-- Defender for Cloud
-- Terraform
-- Management Groups
-- landing zone/governance expansion
+Before stopping platform expansion and moving the primary focus to applications and interviews:
+
+1. Private Endpoints and Private DNS
+2. hub-spoke networking and VNet peering
+3. network segmentation / NSGs where appropriate
+4. meaningful Terraform implementation
+5. Architecture Decision Records
+6. final architecture diagram and README cleanup
+7. lightweight resilience / disaster-recovery design
+8. lightweight threat model
+
+After these areas are complete, CloudPlatformLab will stop expanding for portfolio purposes.
+
+The objective is to demonstrate platform-engineering and architecture ownership rather than build an arbitrary catalogue of Azure services.
 
 ---
 
@@ -1500,5 +1712,9 @@ Selected implementation evidence is stored in [`docs/evidence`](evidence/).
 | [Application Insights request telemetry](evidence/17-application-insights-request-telemetry.png) | Individual application requests, including the Key Vault integration endpoint, captured and correlated in Application Insights |
 | [Azure Monitor alert email fired](evidence/18-azure-monitor-alert-email-fired.png) | End-to-end operational notification from failed application request telemetry through Azure Monitor and the Action Group to email |
 | [Azure Monitor alert fired](evidence/19-azure-monitor-alert-fired.png) | Fired Azure Monitor metric alert visible in Azure and scoped to the Application Insights failed-request signal |
-| [Azure Policy Environment Tag Compliance](evidence/20-azure-policy-environment-tag-compliance.png) | Azure Policy compliance evaluation across the Dev environment, showing six compliant resources and one non-compliant resource |
-| [Azure Policy Resource-Level Compliance](evidence/21-azure-policy-resource-compliance.png) | Resource-level Azure Policy evaluation identifying the Azure-created Application Insights smart-detection Action Group as the non-compliant resource |
+| [Azure Policy Environment Tag Compliance](evidence/20-azure-policy-environment-tag-compliance.png) | Earlier resource-group-scoped Azure Policy compliance evidence captured before the Management Group governance expansion |
+| [Azure Policy Resource-Level Compliance](evidence/21-azure-policy-resource-compliance.png) | Earlier resource-level Policy evaluation that informed the later Management Group governance design |
+| [Management Group landing-zone hierarchy](evidence/22-management-group-landing-zone-hierarchy.png) | Deployed CloudPlatformLab hierarchy showing Platform, Landing Zones, Dev, Prod and the CloudPlatformLab subscription beneath Dev |
+| [Management Group policy inheritance](evidence/23-management-group-policy-inheritance.png) | Subscription-level Policy view showing the Environment-tag policy inherited from the Landing Zones Management Group |
+| [Management Group policy compliance](evidence/24-management-group-policy-compliance.png) | Inherited Management Group policy evaluation showing 8 resources evaluated, 6 compliant and 2 non-compliant |
+| [Management Group policy resource compliance](evidence/25-management-group-policy-resource-compliance.png) | Resource-level inherited-policy results identifying compliant resources and Azure-created/supporting resources requiring governance review |
