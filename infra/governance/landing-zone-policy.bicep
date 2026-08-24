@@ -6,7 +6,7 @@ param policyDefinitionManagementGroupName string = 'mg-cloudplatformlab'
 @description('Management Group where the policy is assigned and inherited by child landing zones.')
 param policyAssignmentManagementGroupName string = 'mg-cloudplatformlab-landing-zones'
 
-module policyDefinition 'policy-definitions/management-group.bicep' = {
+module policyDefinition 'policy-definitions/environment-tag-policy.bicep' = {
   name: 'deployManagementGroupPolicyDefinition'
   scope: managementGroup(policyDefinitionManagementGroupName)
 
@@ -15,7 +15,7 @@ module policyDefinition 'policy-definitions/management-group.bicep' = {
   }
 }
 
-module policyAssignment 'assignments/management-group.bicep' = {
+module policyAssignment 'assignments/environment-tag-assignment.bicep' = {
   name: 'deployLandingZonesPolicyAssignment'
   scope: managementGroup(policyAssignmentManagementGroupName)
 

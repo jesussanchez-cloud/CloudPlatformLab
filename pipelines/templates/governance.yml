@@ -38,21 +38,6 @@ stages:
     steps:
 
     - task: AzureCLI@2
-      displayName: 'Validate Subscription Governance Bicep'
-      inputs:
-        azureSubscription: ${{ parameters.serviceConnection }}
-        scriptType: 'bash'
-        scriptLocation: 'inlineScript'
-        inlineScript: |
-          set -euo pipefail
-
-          az bicep build \
-            --file infra/governance/main.bicep \
-            --stdout > /dev/null
-
-          echo "Subscription governance Bicep validation passed."
-
-    - task: AzureCLI@2
       displayName: 'Validate Management Group Hierarchy Bicep'
       inputs:
         azureSubscription: ${{ parameters.serviceConnection }}
@@ -62,7 +47,7 @@ stages:
           set -euo pipefail
 
           az bicep build \
-            --file infra/governance/management-groups.bicep \
+            --file infra/governance/management-group-hierarchy.bicep \
             --stdout > /dev/null
 
           echo "Management Group hierarchy Bicep validation passed."
@@ -77,7 +62,7 @@ stages:
           set -euo pipefail
 
           az bicep build \
-            --file infra/governance/management-group-governance.bicep \
+            --file infra/governance/landing-zone-policy.bicep \
             --stdout > /dev/null
 
           echo "Management Group governance Bicep validation passed."
@@ -204,7 +189,7 @@ stages:
           az deployment mg what-if \
             --management-group-id mg-cloudplatformlab \
             --location ${{ parameters.location }} \
-            --template-file infra/governance/management-groups.bicep \
+            --template-file infra/governance/management-group-hierarchy.bicep \
 
 # =========================================================
 # MANAGEMENT GROUP HIERARCHY - DEPLOY
@@ -240,8 +225,8 @@ stages:
                 az deployment mg create \
                   --management-group-id mg-cloudplatformlab \
                   --location ${{ parameters.location }} \
-                  --template-file infra/governance/management-groups.bicep \
-                  --name cloudplatformlab-management-groups             
+                  --template-file infra/governance/management-group-hierarchy.bicep \
+                  --name cloudplatformlab-management-group-hierarchy             
 
 
 # =========================================================
@@ -272,7 +257,7 @@ stages:
           az deployment mg what-if \
             --management-group-id mg-cloudplatformlab \
             --location ${{ parameters.location }} \
-            --template-file infra/governance/management-group-governance.bicep
+            --template-file infra/governance/landing-zone-policy.bicep
 
 
 # =========================================================
@@ -309,74 +294,5 @@ stages:
                 az deployment mg create \
                   --management-group-id mg-cloudplatformlab \
                   --location ${{ parameters.location }} \
-                  --template-file infra/governance/management-group-governance.bicep \
-                  --name cloudplatformlab-management-group-governance
-
-
-# =========================================================
-# SUBSCRIPTION GOVERNANCE - WHAT-IF
-# =========================================================
-
-- stage: GovernanceSubscriptionWhatIf
-  displayName: 'Subscription Governance What-If'
-  dependsOn: DeployGovernanceManagementGroupPolicy
-  condition: succeeded()
-
-  jobs:
-
-  - job: GovernanceSubscriptionWhatIf
-    displayName: 'Preview Subscription Governance'
-
-    steps:
-
-    - task: AzureCLI@2
-      displayName: 'Subscription Governance What-If'
-      inputs:
-        azureSubscription: ${{ parameters.serviceConnection }}
-        scriptType: 'bash'
-        scriptLocation: 'inlineScript'
-        inlineScript: |
-          set -euo pipefail
-
-          az deployment sub what-if \
-            --location ${{ parameters.location }} \
-            --template-file infra/governance/main.bicep \
-            --parameters resourceGroupName=${{ parameters.resourceGroupName }}
-
-
-# =========================================================
-# SUBSCRIPTION GOVERNANCE - DEPLOY
-# =========================================================
-
-- stage: DeployGovernanceSubscription
-  displayName: 'Deploy Subscription Governance'
-  dependsOn: GovernanceSubscriptionWhatIf
-  condition: succeeded()
-
-  jobs:
-
-  - deployment: DeployGovernanceSubscription
-    displayName: 'Deploy Subscription Governance'
-    environment: ${{ parameters.devEnvironment }}
-
-    strategy:
-      runOnce:
-        deploy:
-          steps:
-
-          - checkout: self
-
-          - task: AzureCLI@2
-            displayName: 'Deploy Subscription Governance Bicep'
-            inputs:
-              azureSubscription: ${{ parameters.serviceConnection }}
-              scriptType: 'bash'
-              scriptLocation: 'inlineScript'
-              inlineScript: |
-                set -euo pipefail
-
-                az deployment sub create \
-                  --location ${{ parameters.location }} \
-                  --template-file infra/governance/main.bicep \
-                  --parameters resourceGroupName=${{ parameters.resourceGroupName }} \
-                  --name cloudplatformlab-governance-dev
+                  --template-file infra/governance/landing-zone-policy.bicep \
+                  --name cloudplatformlab-landing-zone-policy
