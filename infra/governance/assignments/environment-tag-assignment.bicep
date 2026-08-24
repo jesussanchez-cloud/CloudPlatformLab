@@ -1,4 +1,4 @@
-targetScope = 'resourceGroup'
+targetScope = 'managementGroup'
 
 @description('ID of the policy definition to assign.')
 param policyDefinitionId string
@@ -6,14 +6,14 @@ param policyDefinitionId string
 @description('Environment name used for naming.')
 param environment string = 'dev'
 
-var policyAssignmentName = 'require-environment-tag-${environment}'
+var policyAssignmentName = 'env-tag-${environment}'
 
 resource environmentTagAssignment 'Microsoft.Authorization/policyAssignments@2024-04-01' = {
   name: policyAssignmentName
 
   properties: {
     displayName: 'Audit missing Environment tag - ${environment}'
-    description: 'Audits resources that do not contain the Environment tag.'
+    description: 'Audits resources in this management group scope that do not contain the Environment tag.'
     policyDefinitionId: policyDefinitionId
     enforcementMode: 'Default'
 
@@ -26,6 +26,7 @@ resource environmentTagAssignment 'Microsoft.Authorization/policyAssignments@202
     metadata: {
       assignedBy: 'CloudPlatformLab'
       environment: environment
+      scopeType: 'ManagementGroup'
     }
   }
 }

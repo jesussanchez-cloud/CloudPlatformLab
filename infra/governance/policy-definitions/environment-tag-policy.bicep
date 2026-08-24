@@ -1,12 +1,7 @@
-targetScope = 'subscription'
+targetScope = 'managementGroup'
 
-@description('Resource group where the policy will be assigned.')
-param resourceGroupName string = 'rg-cloudplatformlab-dev'
-
-@description('Environment name used for naming.')
-param environment string = 'dev'
-
-var policyDefinitionName = 'require-environment-tag'
+@description('Name of the custom policy definition.')
+param policyDefinitionName string = 'require-environment-tag'
 
 resource requireEnvironmentTagPolicy 'Microsoft.Authorization/policyDefinitions@2023-04-01' = {
   name: policyDefinitionName
@@ -27,6 +22,7 @@ resource requireEnvironmentTagPolicy 'Microsoft.Authorization/policyDefinitions@
         field: 'tags[Environment]'
         exists: 'false'
       }
+
       then: {
         effect: 'audit'
       }
@@ -34,17 +30,5 @@ resource requireEnvironmentTagPolicy 'Microsoft.Authorization/policyDefinitions@
   }
 }
 
-module policyAssignment 'assignment.bicep' = {
-  name: 'deployEnvironmentTagPolicyAssignment'
-  scope: resourceGroup(resourceGroupName)
-
-  params: {
-    policyDefinitionId: requireEnvironmentTagPolicy.id
-    environment: environment
-  }
-}
-
 output policyDefinitionName string = requireEnvironmentTagPolicy.name
 output policyDefinitionId string = requireEnvironmentTagPolicy.id
-output policyAssignmentName string = policyAssignment.outputs.policyAssignmentName
-output policyAssignmentId string = policyAssignment.outputs.policyAssignmentId
