@@ -201,18 +201,10 @@ stages:
         inlineScript: |
           set -euo pipefail
 
-          subscriptionId=$(az account show \
-            --query id \
-            --output tsv)
-
-          echo "Target subscription: $subscriptionId"
-
           az deployment mg what-if \
             --management-group-id mg-cloudplatformlab \
             --location ${{ parameters.location }} \
             --template-file infra/governance/management-groups.bicep \
-            --parameters subscriptionId="$subscriptionId"
-
 
 # =========================================================
 # MANAGEMENT GROUP HIERARCHY - DEPLOY
@@ -244,18 +236,11 @@ stages:
               scriptLocation: 'inlineScript'
               inlineScript: |
                 set -euo pipefail
-
-                subscriptionId=$(az account show \
-                  --query id \
-                  --output tsv)
-
-                echo "Target subscription: $subscriptionId"
-
+                
                 az deployment mg create \
                   --management-group-id mg-cloudplatformlab \
                   --location ${{ parameters.location }} \
                   --template-file infra/governance/management-groups.bicep \
-                  --parameters subscriptionId="$subscriptionId" \
                   --name cloudplatformlab-management-groups             
 
 

@@ -1,8 +1,5 @@
 targetScope = 'managementGroup'
 
-@description('Subscription ID to place in the Dev landing zone.')
-param subscriptionId string
-
 var platformManagementGroupName = 'mg-cloudplatformlab-platform'
 var connectivityManagementGroupName = 'mg-cloudplatformlab-connectivity'
 var managementManagementGroupName = 'mg-cloudplatformlab-management'
@@ -99,23 +96,9 @@ resource prod 'Microsoft.Management/managementGroups@2024-02-01-preview' = {
   }
 }
 
-module subscriptionPlacement 'assignments/subscription.bicep' = {
-  name: 'placeSubscriptionInDevLandingZone'
-
-  params: {
-    subscriptionId: subscriptionId
-    targetManagementGroupId: devManagementGroupName
-  }
-
-  dependsOn: [
-    dev
-  ]
-}
-
 output platformManagementGroupId string = platform.id
 output connectivityManagementGroupId string = connectivity.id
 output managementManagementGroupId string = management.id
 output landingZonesManagementGroupId string = landingZones.id
 output devManagementGroupId string = dev.id
 output prodManagementGroupId string = prod.id
-output placedSubscriptionId string = subscriptionPlacement.outputs.subscriptionId
