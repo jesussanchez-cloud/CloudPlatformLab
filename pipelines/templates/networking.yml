@@ -100,8 +100,19 @@ stages:
             exit 1
           fi
 
-          echo "Networking readiness checks passed."
+          echo "Checking target Key Vault..."
 
+          if ! az keyvault show \
+            --name kv-cloudplatformlab-dev \
+            --resource-group ${{ parameters.resourceGroupName }} \
+            --output none; then
+            echo "##vso[task.logissue type=error]Key Vault kv-cloudplatformlab-dev does not exist or cannot be accessed."
+            exit 1
+          fi
+
+          echo "Target Key Vault check passed."
+
+          echo "Networking readiness checks passed."
 
 # =========================================================
 # NETWORKING - WHAT-IF

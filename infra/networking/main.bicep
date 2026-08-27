@@ -6,6 +6,9 @@ param location string = resourceGroup().location
 @description('Environment name')
 param environment string = 'Dev'
 
+@description('Name of the existing key vault to connect privately')
+param keyVaultName string = 'kv-cloudplatformlab-dev'
+
 var projectName = 'CloudPlatformLab'
 
 var commonTags = {
@@ -15,6 +18,8 @@ var commonTags = {
   Owner: 'Jesus Sanchez'
   CostCenter: projectName
 }
+
+var keyVaultPrivateDnsZoneName = 'privatelink.vaultcore.azure.net'
 
 resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
   name: 'vnet-cloudplatformlab-dev'
@@ -46,5 +51,69 @@ resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
   }
 }
 
+resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
+  name: keyVaultName
+}
+
+resource keyVaultPrivateEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' = {
+  name: 'pe-${keyVaultName}'
+  location: location
+  tags: commonTags
+
+  properties: {
+    subnet: {
+      id: vnet.properties.subnets[1].id
+    }
+
+    privateLinkServiceConnections: [
+      {
+        name: 'keyvault-private-link'
+        properties: {
+          privateLinkServiceId: keyVault.id
+          groupIds: [
+            'vault'
+          ]
+        }
+      }
+    ]
+  }
+}
+
+resource keyVaultPrivateDnsZone 'Microsoft.Network/privateDnsZones@2024-06-01' = {
+  name: keyVaultPrivateDnsZoneName
+  location: 'global'
+  tags: commonTags
+}
+
+resource keyVaultPrivateDnsZoneVnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = {
+  parent: keyVaultPrivateDnsZone
+  name: 'link-vnet-cloudplatformlab-dev'
+  location: 'global'
+
+  properties: {
+    registrationEnabled: false
+    virtualNetwork: {
+      id: vnet.id
+    }
+  }
+}
+
+resource keyVaultPrivateDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = {
+  parent: keyVaultPrivateEndpoint
+  name: 'default'
+
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'keyvault-private-dns'
+        properties: {
+          privateDnsZoneId: keyVaultPrivateDnsZone.id
+        }
+      }
+    ]
+  }
+}
+
 output virtualNetworkName string = vnet.name
 output virtualNetworkId string = vnet.id
+output keyVaultPrivateEndpointId string = keyVaultPrivateEndpoint.id
