@@ -1,6 +1,6 @@
 # CloudPlatformLab
 
-CloudPlatformLab is an Azure platform engineering portfolio project demonstrating Infrastructure as Code, CI/CD, identity, security, networking, observability, governance and cost-aware cloud operations.
+CloudPlatformLab is an Azure platform engineering portfolio project demonstrating Infrastructure as Code, CI/CD, identity, security, networking, observability, governance, containerisation and cost-aware cloud operations.
 
 The application is intentionally simple. The engineering focus is the platform around it: **reproducible infrastructure, identity-first authentication, controlled deployments, private connectivity, operational monitoring and enterprise-style governance**.
 
@@ -27,6 +27,17 @@ The application is intentionally simple. The engineering focus is the platform a
                                  |
                             Deployment
 
+The application build also validates the container deployment artifact:
+
+    ASP.NET Core .NET 8
+            |
+            +--> .NET Build
+            |
+            +--> Docker Build
+                     |
+                     v
+              Container Image
+
 Infrastructure domains use independent reusable Azure DevOps YAML templates, allowing each area to be validated and deployed without unrelated constraints blocking the entire platform.
 
 ---
@@ -42,6 +53,8 @@ Infrastructure domains use independent reusable Azure DevOps YAML templates, all
 - manual Azure DevOps Environment approval
 - **Workload Identity Federation** instead of long-lived deployment credentials
 - independent App Service, networking, observability, security and governance deployment paths
+- .NET application build validation
+- **Docker image build validation through Azure DevOps CI**
 
 ### Networking & Security
 
@@ -138,7 +151,7 @@ Privileged subscription placement is kept separate from normal repeatable CI/CD 
 
 ## Application Integration
 
-The ASP.NET Core .NET 8 workload currently runs locally while consuming real Azure services:
+The ASP.NET Core .NET 8 workload consumes real Azure services during local development:
 
     ASP.NET Core
         |
@@ -156,7 +169,28 @@ The ASP.NET Core .NET 8 workload currently runs locally while consuming real Azu
                  |
                  +--> Azure Monitor Alerting
 
-This allows identity, security, telemetry and monitoring integration to be validated against real Azure infrastructure independently of the application-hosting constraint.
+The same application has now also been packaged and executed successfully as a Docker container.
+
+The production Dockerfile uses a **multi-stage build**, separating the .NET 8 SDK build environment from the ASP.NET Core runtime image. The container exposes the application on port `8080`.
+
+Containerisation has been validated at two levels:
+
+    Repository
+        |
+        +--> Local Docker Build
+        |        |
+        |        v
+        |   Running Products API
+        |   localhost:8080
+        |
+        +--> Azure DevOps
+                 |
+                 v
+            Docker Image Build
+
+The CI pipeline currently validates that the image can be built reproducibly on a Microsoft-hosted Linux agent. Image publication and Kubernetes deployment are deliberately deferred to the ACR/AKS increment.
+
+Azure authentication from the future Kubernetes workload will use **Azure Workload Identity** rather than embedding credentials in the container image.
 
 ---
 
@@ -173,8 +207,10 @@ The pipeline detects this during **readiness validation** and stops only the App
 ## Engineering Decisions
 
 - **Bicep over portal configuration** — infrastructure remains reproducible and reviewable.
+- **Multi-stage Docker build** — separates application compilation from the final runtime image.
+- **CI container validation** — proves the Docker image can be built outside the developer workstation.
 - **Workload Identity Federation** — avoids long-lived Azure DevOps client secrets.
-- **Managed Identity architecture** — avoids application-managed Azure credentials.
+- **Managed Identity / Workload Identity architecture** — avoids application-managed Azure credentials.
 - **Azure RBAC for Key Vault** — provides a consistent authorization model.
 - **Private Endpoint + Private DNS** — establishes private service connectivity for VNet-hosted workloads.
 - **Separate application and Private Endpoint subnets** — separates workload integration from private platform-service connectivity.
@@ -193,7 +229,7 @@ Detailed reasoning is documented in [`docs/architecture.md`](docs/architecture.m
 
 Evidence of the working implementation is stored in [`docs/evidence`](docs/evidence/).
 
-The **29 captured evidence items** cover:
+The **32 captured evidence items** cover:
 
 - Bicep What-If and deployment safeguards
 - manual deployment approval
@@ -209,6 +245,9 @@ The **29 captured evidence items** cover:
 - Private DNS zone and VNet integration
 - Key Vault private DNS A record
 - public DNS baseline for comparison with future VNet-side resolution
+- **containerised Products API running on port 8080**
+- **Docker container runtime and port publishing**
+- **Docker image build through Azure DevOps CI**
 
 This evidence distinguishes implemented capabilities from target-state architecture.
 
@@ -220,6 +259,8 @@ This evidence distinguishes implemented capabilities from target-state architect
 
 **Infrastructure:** Bicep, Azure CLI
 
+**Containers:** Docker, multi-stage .NET container builds
+
 **DevOps:** Azure DevOps, Azure Repos, Azure Pipelines, reusable YAML templates, Workload Identity Federation, GitHub
 
 **Application:** ASP.NET Core, .NET 8, `DefaultAzureCredential`
@@ -230,20 +271,49 @@ This evidence distinguishes implemented capabilities from target-state architect
 
 The remaining work is deliberately limited to high-value platform-engineering capabilities:
 
-1. **Terraform networking implementation**
-2. **Containerised Products API + bounded AKS implementation**
-3. **Hub-and-spoke networking** where it adds architectural value
-4. **Architecture Decision Records**
-5. **Resilience / disaster-recovery design**
-6. **FinOps documentation**
-7. **Final architecture diagram and repository cleanup**
+1. **Terraform implementation for the AKS platform**
+2. **Azure Container Registry + bounded AKS implementation**
+3. **Kubernetes workload configuration** — Deployment, Service, health probes, resource controls, autoscaling and ingress
+4. **Azure Workload Identity + Key Vault integration from AKS**
+5. **VNet-side private connectivity validation from the Kubernetes workload**
+6. **Hub-and-spoke networking** where it adds architectural value
+7. **Architecture Decision Records**
+8. **Resilience / disaster-recovery and FinOps documentation**
+9. **Final architecture diagram and repository cleanup**
 
-After these increments, CloudPlatformLab will be considered **portfolio-complete** rather than expanded with additional Azure services for their own sake.
+Terraform will be introduced as part of the AKS platform rather than as a disconnected rewrite of infrastructure already implemented successfully in Bicep.
+
+The intended next progression is:
+
+    Docker
+      |
+      v
+    Terraform
+      |
+      v
+    Azure Container Registry
+      |
+      v
+    Azure Kubernetes Service
+      |
+      v
+    Kubernetes Workload
+      |
+      v
+    Azure Workload Identity
+      |
+      v
+    Key Vault + Private Connectivity
+      |
+      v
+    Azure Monitor / Container Insights
+
+After these bounded increments, CloudPlatformLab will be considered **portfolio-complete** rather than expanded with additional Azure services for their own sake.
 
 ---
 
 ## Detailed Architecture
 
-For the complete implementation, deployment architecture, identity flows, governance model and design reasoning, see:
+For the complete implementation, deployment architecture, identity flows, container design, governance model and design reasoning, see:
 
 **[`docs/architecture.md`](docs/architecture.md)**

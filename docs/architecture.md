@@ -2,7 +2,7 @@
 
 CloudPlatformLab is a small Azure platform-engineering project built around a deliberately simple ASP.NET Core workload.
 
-The application exists primarily to exercise the platform. The architectural focus is Infrastructure as Code, CI/CD, identity, security, networking, observability, governance and cost control.
+The application exists primarily to exercise the platform. The architectural focus is Infrastructure as Code, CI/CD, identity, security, networking, observability, governance, containerisation and cost control.
 
 ---
 
@@ -13,6 +13,10 @@ The Dev platform is split into independently deployable infrastructure domains:
     Azure DevOps
          |
     Build Application
+         |
+         +--> Build .NET Application
+         |
+         +--> Build Docker Image
          |
          +-----------+-----------+-----------+-----------+
          |           |           |           |           |
@@ -40,6 +44,13 @@ Networking, observability, security and governance are deployed through Azure De
 
 App Service is defined and validated in Bicep but is not currently provisioned because the subscription does not provide sufficient quota for the selected SKU. Infrastructure domains remain independent so this constraint does not block unrelated platform work.
 
+The application now has two independently validated build artifacts:
+
+- a normal .NET Release build
+- a Docker container image
+
+Azure DevOps validates both before downstream infrastructure deployment paths can complete.
+
 ---
 
 ## Application Layer
@@ -56,13 +67,16 @@ Current application capabilities include:
 - Application Insights SDK
 - real request telemetry
 - failed-request telemetry used by Azure Monitor
+- Docker container packaging
 - App Service and deployment-slot architecture defined in Bicep
 
-During local development, the application authenticates through the developer's Azure identity:
+During local development outside a container, the application authenticates through the developer's Azure identity:
 
     ASP.NET Core
          |
     DefaultAzureCredential
+         |
+    Developer Identity
          |
     Microsoft Entra ID
          |
@@ -76,7 +90,9 @@ Application Insights receives telemetry from the running application, allowing t
 
 Environment-specific local values are stored outside source control using .NET User Secrets.
 
-When the application is hosted in Azure, the intended authentication path is:
+### Azure-hosted identity model
+
+For the App Service architecture, the intended authentication path is:
 
     App Service
          |
@@ -88,7 +104,203 @@ When the application is hosted in Azure, the intended authentication path is:
          |
     Azure Key Vault
 
-This preserves the same application authentication model without introducing application-managed credentials.
+For the planned AKS implementation, the equivalent identity path will be:
+
+    Products API Pod
+         |
+    Kubernetes Service Account
+         |
+    Azure Workload Identity
+         |
+    Microsoft Entra ID
+         |
+    Azure RBAC
+         |
+    Azure Key Vault
+
+Both hosting models preserve the same identity-first application design without introducing application-managed Azure credentials.
+
+---
+
+## Container Architecture
+
+The Products API is now packaged as a Docker container.
+
+The production Dockerfile is located at:
+
+    src/CloudPlatformLab.Web/Dockerfile
+
+The Docker build uses the repository root as its build context because the Web project references the separate `CloudPlatformLab.Application` project.
+
+    CloudPlatformLab/
+    |
+    +-- src/
+    |   |
+    |   +-- CloudPlatformLab.Web/
+    |   |   +-- Dockerfile
+    |   |
+    |   +-- CloudPlatformLab.Application/
+    |
+    +-- .dockerignore
+
+### Multi-Stage Build
+
+The Dockerfile uses a multi-stage build:
+
+    .NET 8 SDK Image
+           |
+           v
+        Restore
+           |
+           v
+        Publish
+           |
+           v
+    ASP.NET Core 8 Runtime Image
+           |
+           v
+    CloudPlatformLab.Web.dll
+           |
+           v
+        Port 8080
+
+The build stage uses:
+
+    mcr.microsoft.com/dotnet/sdk:8.0
+
+The final runtime stage uses:
+
+    mcr.microsoft.com/dotnet/aspnet:8.0
+
+Only the published application output is copied into the final image.
+
+This keeps the .NET SDK, build tooling and application source out of the runtime layer.
+
+The container is configured to listen on:
+
+    8080
+
+through:
+
+    ASPNETCORE_HTTP_PORTS=8080
+
+### Docker Build Context
+
+The Docker build is executed from the repository root:
+
+    docker build \
+      -f src/CloudPlatformLab.Web/Dockerfile \
+      -t cloudplatformlab-api:<tag> \
+      .
+
+Using the repository root as the context allows both .NET project files to be restored correctly.
+
+The root `.dockerignore` excludes content that is unnecessary for producing the application image, including:
+
+- build output
+- local IDE files
+- Git metadata
+- documentation
+- infrastructure definitions
+- pipeline definitions
+- test output
+
+This reduces unnecessary Docker build-context transfer and keeps unrelated repository content out of the image build.
+
+### Local Runtime Validation
+
+The image has been built and executed locally.
+
+Runtime flow:
+
+    Docker Image
+        |
+        v
+    cloudplatformlab-api
+        |
+        v
+    Container Port 8080
+        |
+        v
+    Host Port 8080
+        |
+        v
+    http://localhost:8080
+
+The Products API successfully rendered from the running container.
+
+Docker runtime inspection also confirmed the expected port publishing:
+
+    0.0.0.0:8080 -> 8080/tcp
+
+This proves that the application is not merely buildable as an image but can execute successfully inside the Linux container runtime.
+
+### Runtime Configuration and Identity
+
+Environment-specific application configuration is not baked into the image.
+
+For example, `KeyVaultName` can be supplied as runtime configuration rather than being part of the Docker build.
+
+This distinction is deliberate:
+
+    Docker Image
+       |
+       | application + runtime only
+       |
+       v
+    Runtime Environment
+       |
+       +--> configuration
+       +--> identity
+       +--> secrets through Azure services
+
+A normal local Linux container does not automatically inherit the host developer's Azure authentication context.
+
+That behaviour reinforces the intended production design: Azure-hosted containers should receive workload identity from the hosting platform rather than storing or copying developer credentials into the image.
+
+For AKS, Azure Workload Identity will provide this capability.
+
+---
+
+## Container CI Validation
+
+Azure DevOps independently validates the Docker deployment artifact.
+
+The Build stage contains separate jobs:
+
+    Build
+    |
+    +-- Build .NET Application
+    |      |
+    |      +-- Install .NET 8 SDK
+    |      +-- Restore
+    |      +-- Release Build
+    |
+    +-- Build Docker Image
+           |
+           +-- Docker multi-stage build
+           +-- Build-specific image tag
+
+The Docker image is tagged using the Azure DevOps build identifier rather than a fixed local `dev` tag.
+
+Conceptually:
+
+    cloudplatformlab-api:$(Build.BuildId)
+
+This provides a unique CI build artifact identity.
+
+The image currently exists only on the temporary Microsoft-hosted pipeline agent.
+
+It is not yet pushed to a registry.
+
+This is intentional. The current milestone proves:
+
+- the Dockerfile is valid
+- the repository contains everything required to build the image
+- the build is reproducible away from the developer workstation
+- the container artifact is validated as part of CI
+
+Image publication will be added when Azure Container Registry is introduced.
 
 ---
 
@@ -125,6 +337,34 @@ Most Dev workload resources are deployed to:
     UK South
 
 Separating infrastructure domains keeps their dependencies, permissions, validation and deployment lifecycle isolated while maintaining a single repository and CI/CD workflow.
+
+### Terraform Direction
+
+Terraform will now be introduced as part of the AKS platform increment.
+
+It will not be used to rewrite the existing Bicep platform simply to demonstrate another syntax.
+
+The intended division is:
+
+    Existing Azure Platform
+            |
+            +--> Bicep
+            |     |
+            |     +-- Networking foundation
+            |     +-- Security
+            |     +-- Observability
+            |     +-- Governance
+            |     +-- App Service definition
+            |
+            +--> Terraform
+                  |
+                  +-- AKS-related infrastructure
+                  +-- Container platform resources
+                  +-- reusable modules where justified
+                  +-- remote-state design
+                  +-- Terraform CI validation
+
+This allows the project to demonstrate both Azure-native Bicep and industry-standard Terraform in meaningful contexts.
 
 ---
 
@@ -182,7 +422,11 @@ The Private DNS zone is linked to `vnet-cloudplatformlab-dev`, allowing workload
 
 A public Cloud Shell DNS lookup was captured as a baseline. Because normal Cloud Shell is outside the VNet, it follows the public DNS path rather than resolving the vault to `10.10.2.4`.
 
-Runtime DNS resolution from a VNet-connected workload has not yet been captured because the subscription currently prevents deployment of the intended App Service workload and economical test VM capacity was unavailable. The deployed Private Endpoint, DNS zone, VNet link and A record are therefore validated as infrastructure, while runtime private-path validation remains separate.
+Runtime DNS resolution from a VNet-connected workload has not yet been captured because the subscription currently prevents deployment of the intended App Service workload and economical test VM capacity was unavailable.
+
+The deployed Private Endpoint, DNS zone, VNet link and A record are therefore validated as infrastructure, while runtime private-path validation remains separate.
+
+The planned AKS workload will provide a suitable VNet-connected execution environment from which this path can be validated.
 
 Public network access to Key Vault remains enabled so existing local application integration continues to function until an Azure-hosted workload can consume the private path.
 
@@ -209,6 +453,10 @@ Application access uses `DefaultAzureCredential`, Microsoft Entra ID and scoped 
 Azure DevOps also uses identity-based Key Vault access. The service connection identity has the `Key Vault Secrets User` role required to retrieve the `AlertEmail` configuration value used by the observability deployment.
 
 No application secret values, notification email addresses or long-lived Azure client secrets are committed to the repository.
+
+Container images also remain credential-free.
+
+Identity is supplied by the execution environment rather than baked into the container.
 
 ---
 
@@ -278,6 +526,8 @@ Instead:
 The pipeline retrieves the value at deployment time through Azure RBAC and does not intentionally print it to pipeline logs.
 
 The Log Analytics workspace uses 30-day retention to provide useful Dev telemetry while limiting unnecessary storage cost.
+
+Container-specific monitoring will be introduced with AKS using Azure Monitor / Container Insights rather than adding separate observability tooling solely for the Docker-local milestone.
 
 ---
 
@@ -375,29 +625,40 @@ The pipeline is split into a root orchestration file and reusable infrastructure
     +-- pipelines/templates/security.yml
     +-- pipelines/templates/governance.yml
 
-The flow is:
+The application build path is:
 
-    Feature Branch
-          |
-    Pull Request
-          |
     Dev
-          |
+     |
+     v
     Build
-          |
-          +-----------+-----------+-----------+-----------+
-          |           |           |           |           |
-     App Service  Networking  Observability Security  Governance
-          |           |           |           |           |
-       Validate    Validate    Validate    Validate    Validate
-          |           |           |           |           |
-      Readiness   Readiness   Readiness   Readiness   Readiness
-          |           |           |           |           |
-       What-If     What-If     What-If     What-If     What-If
-          |           |           |           |           |
-      Approval    Approval    Approval    Approval    Approval
-          |           |           |           |           |
-       Deploy      Deploy      Deploy      Deploy      Deploy
+     |
+     +-------------------------+
+     |                         |
+     v                         v
+    .NET Build             Docker Build
+     |                         |
+     +------------+------------+
+                  |
+                  v
+          Build Stage Complete
+
+Infrastructure then follows:
+
+    Build
+      |
+      +-----------+-----------+-----------+-----------+
+      |           |           |           |           |
+ App Service  Networking  Observability Security  Governance
+      |           |           |           |           |
+   Validate    Validate    Validate    Validate    Validate
+      |           |           |           |           |
+  Readiness   Readiness   Readiness   Readiness   Readiness
+      |           |           |           |           |
+   What-If     What-If     What-If     What-If     What-If
+      |           |           |           |           |
+  Approval    Approval    Approval    Approval    Approval
+      |           |           |           |           |
+   Deploy      Deploy      Deploy      Deploy      Deploy
 
 Infrastructure deployments target:
 
@@ -406,6 +667,24 @@ Infrastructure deployments target:
 The Azure DevOps Environment provides the manual approval control before deployment.
 
 Independent deployment paths prevent an environmental constraint in one domain from blocking unrelated platform changes.
+
+### Change Detection
+
+The root pipeline detects which platform domains have changed.
+
+Normal domain-specific changes trigger only the corresponding infrastructure path.
+
+A change to:
+
+    azure-pipelines.yml
+
+is treated differently.
+
+Because the root file controls orchestration across all platform domains, modifying it intentionally enables all infrastructure paths for validation.
+
+This ensures changes to shared pipeline behaviour cannot silently break downstream templates.
+
+A Docker-only application change that does not modify the root orchestration file does not require all infrastructure domains to run.
 
 ---
 
@@ -435,6 +714,8 @@ Readiness checks detect subscription, permission and environmental conditions th
 
 Keeping these concerns separate produces clearer pipeline failures.
 
+Docker build validation adds another fail-fast control before deployment by ensuring the workload packaging definition is also valid.
+
 ---
 
 ## Identity and Authentication
@@ -459,9 +740,7 @@ Authentication uses Workload Identity Federation:
 
 This avoids long-lived pipeline client secrets.
 
-### Application
-
-Local development:
+### Application — Local Development
 
     Application
          |
@@ -475,7 +754,7 @@ Local development:
          |
     Key Vault
 
-Azure-hosted target:
+### Application — App Service Target
 
     App Service
          |
@@ -487,7 +766,23 @@ Azure-hosted target:
          |
     Key Vault
 
+### Application — AKS Target
+
+    Products API Pod
+         |
+    Kubernetes Service Account
+         |
+    Azure Workload Identity
+         |
+    Microsoft Entra ID
+         |
+    Azure RBAC
+         |
+    Key Vault
+
 The application therefore uses an identity-first authentication model across environments.
+
+Credentials do not need to be embedded into application code, pipeline YAML, Docker images or Kubernetes manifests.
 
 ---
 
@@ -516,6 +811,8 @@ Standard project tags include:
 
 Azure Policy independently evaluates the required `Environment` tag instead of relying only on IaC conventions.
 
+---
+
 ## Cost Management
 
 Cost is treated as an architectural constraint.
@@ -528,7 +825,7 @@ The project uses a deploy, validate, capture evidence and remove-when-appropriat
         |
     Readiness
         |
-    What-If
+    What-If / Terraform Plan
         |
     Cost Review
         |
@@ -549,6 +846,8 @@ Examples of cost controls include:
 - infrastructure recreated from IaC instead of kept online unnecessarily
 - avoiding expensive temporary resources solely for portfolio evidence
 - independent deployment paths so quota or cost constraints do not halt unrelated work
+- Docker validation performed locally and on ephemeral hosted CI agents before introducing paid container-platform infrastructure
+- future AKS resources treated as temporary lab infrastructure unless their ongoing value justifies their cost
 
 ---
 
@@ -606,6 +905,19 @@ Currently deployed:
             |
             +-- Prod
 
+Application artifact currently implemented:
+
+    Products API
+        |
+        +-- .NET 8 Release build
+        |
+        +-- Docker image
+              |
+              +-- ASP.NET Core 8 runtime
+              +-- Port 8080
+              +-- locally validated
+              +-- Azure DevOps build validated
+
 Defined but not currently provisioned:
 
 - App Service Plan
@@ -641,6 +953,16 @@ The remaining work focuses on capabilities that materially strengthen the platfo
 - Key Vault integration
 - system-assigned managed identity architecture
 
+**Containers**
+
+- Docker
+- multi-stage .NET 8 Docker build
+- runtime-only final image
+- port `8080`
+- local image build
+- local container runtime validation
+- Azure DevOps Docker image build validation
+
 **Networking**
 
 - Dev VNet
@@ -670,6 +992,7 @@ The remaining work focuses on capabilities that materially strengthen the platfo
 - purge protection
 - Private Link foundation
 - secrets and environment-specific configuration kept out of source control
+- credential-free container image design
 
 **Governance**
 
@@ -690,11 +1013,23 @@ The remaining work focuses on capabilities that materially strengthen the platfo
 - What-If
 - approval gates
 - independent infrastructure deployment paths
+- .NET CI build
+- Docker CI build
 
 ### Remaining High-Value Work
 
-- Terraform networking implementation
-- containerised Products API and bounded AKS implementation
+- Terraform implementation for the container/AKS platform
+- Azure Container Registry
+- bounded AKS implementation
+- Kubernetes Deployment and Service
+- readiness and liveness probes
+- resource requests and limits
+- horizontal pod autoscaling
+- ingress
+- Azure Workload Identity
+- AKS-to-Key-Vault integration
+- VNet-side Key Vault private-connectivity validation
+- Container Insights / Azure Monitor
 - hub-and-spoke networking where justified
 - Architecture Decision Records
 - resilience/DR design
@@ -715,6 +1050,58 @@ It is appropriate for the simple Products API and demonstrates deployment slots,
 
 The Plan SKU is parameterised so the architecture is not tied permanently to S1.
 
+### Why Docker
+
+Containerising the workload creates a portable deployment artifact that can run consistently across developer, CI and managed-container environments.
+
+The application is containerised before AKS is introduced so container packaging can be validated independently from Kubernetes infrastructure.
+
+This keeps troubleshooting boundaries clear:
+
+    Application
+        |
+    Container
+        |
+    Registry
+        |
+    Kubernetes
+
+Each layer can be proven before the next is introduced.
+
+### Why a Multi-Stage Docker Build
+
+The .NET SDK is required to restore and publish the application but is unnecessary at runtime.
+
+Using a separate ASP.NET Core runtime image keeps build tooling out of the final container layer and reflects normal production container practice.
+
+### Why Runtime Configuration Is Not Baked Into the Image
+
+The same image should be usable across environments.
+
+Environment-specific values and identity should therefore be supplied by the execution platform rather than creating a different image for each environment.
+
+This also prevents Azure credentials and sensitive environment values from becoming part of the image.
+
+### Why Validate Docker in Azure DevOps
+
+A Docker build that works only on the developer workstation is insufficient evidence of reproducibility.
+
+Building the image on a clean Microsoft-hosted Linux agent proves that the repository and Dockerfile contain the information required to produce the artifact independently.
+
+### Why Not Push the Image Yet
+
+Publishing an image without a consumer would add registry infrastructure before it is needed.
+
+Azure Container Registry will be introduced with AKS so the sequence remains purposeful:
+
+    Docker Build
+        |
+    ACR Push
+        |
+    AKS Pull
+        |
+    Kubernetes Deployment
+
 ### Why Keep an AKS Increment Separate
 
 The application does not require Kubernetes merely to function.
@@ -723,19 +1110,33 @@ AKS is therefore treated as a separate platform-engineering exercise rather than
 
 This demonstrates Kubernetes capability while retaining an architecture decision based on workload requirements rather than technology preference.
 
+### Why Terraform for the AKS Increment
+
+The existing Azure platform is already successfully implemented in Bicep.
+
+Rebuilding it entirely in Terraform would create duplication without improving the architecture.
+
+Using Terraform for the AKS-related infrastructure provides a meaningful second IaC implementation while allowing a direct comparison between Azure-native Bicep and Terraform.
+
 ### Why Bicep
 
 Bicep provides an Azure-native IaC model with direct ARM integration.
 
-Terraform will be introduced for a meaningful platform slice rather than duplicating every existing Bicep resource.
+It remains the source of truth for the existing platform domains.
 
 ### Why Workload Identity Federation
 
 Workload Identity Federation allows Azure DevOps to authenticate without storing a long-lived client secret.
 
+### Why Azure Workload Identity for AKS
+
+Kubernetes workloads need an Azure identity without embedding credentials in containers or Kubernetes secrets.
+
+Azure Workload Identity links a Kubernetes Service Account to Microsoft Entra ID, allowing the Products API to use Azure RBAC and `DefaultAzureCredential` while running in AKS.
+
 ### Why `DefaultAzureCredential`
 
-`DefaultAzureCredential` allows the application to use a developer identity locally and managed identity in Azure without changing the application's credential model.
+`DefaultAzureCredential` allows the application to use a developer identity locally and managed/workload identity in Azure without changing the application's credential model.
 
 ### Why Azure RBAC for Key Vault
 
@@ -769,7 +1170,9 @@ Separate subnets provide clearer boundaries and allow each area to evolve indepe
 
 The Private Endpoint and Private DNS infrastructure are implemented, but the application currently runs outside the Azure VNet because App Service deployment is unavailable.
 
-Keeping public access enabled allows existing local Key Vault integration to continue. Public access can be disabled after a hosted VNet-connected workload is available and the private path has been validated.
+Keeping public access enabled allows existing local Key Vault integration to continue.
+
+Public access can be disabled after the AKS workload provides a VNet-connected execution environment and the private path has been validated.
 
 ### Why Application Insights Integration
 
@@ -829,6 +1232,14 @@ Independent paths prevent one constraint from unnecessarily stopping all platfor
 
 Reusable templates keep domain-specific deployment logic isolated while preserving a readable root pipeline.
 
+### Why Root Pipeline Changes Validate Every Infrastructure Domain
+
+`azure-pipelines.yml` controls orchestration across all infrastructure templates.
+
+A change to that file can therefore affect every downstream deployment path.
+
+Enabling all infrastructure domains when the root pipeline changes provides broader regression validation of the CI/CD orchestration.
+
 ### Why Manual Approval
 
 Infrastructure changes can affect security, governance, availability and cost.
@@ -862,6 +1273,12 @@ Resources are kept only when their ongoing value justifies their cost, and IaC a
 Implemented and validated:
 
 - .NET 8 Products API
+- Docker multi-stage build
+- ASP.NET Core runtime container
+- container port `8080`
+- local Docker image build
+- local container runtime validation
+- Azure DevOps Docker image build
 - Azure DevOps CI/CD
 - reusable YAML stage templates
 - independent infrastructure deployment paths
@@ -898,22 +1315,58 @@ Implemented and validated:
 
 The hosted App Service remains defined but undeployed because of subscription quota.
 
-Private-networking runtime verification from a VNet-connected workload remains outstanding because no suitable low-cost VNet-connected compute is currently available. Infrastructure-level Private Endpoint and DNS configuration has been deployed and evidenced.
+Private-networking runtime verification from a VNet-connected workload remains outstanding because no suitable low-cost VNet-connected compute has been available.
+
+Infrastructure-level Private Endpoint and DNS configuration has been deployed and evidenced.
+
+The planned AKS workload provides the next practical opportunity to validate that runtime private path.
 
 ---
 
 ## Remaining Portfolio Work
 
-1. Terraform networking module
-2. bounded AKS implementation
-3. hub-and-spoke networking where it adds architectural value
-4. Architecture Decision Records
-5. resilience and disaster-recovery design
-6. FinOps documentation
-7. final architecture diagram
-8. final README and evidence cleanup
+1. Terraform AKS/platform infrastructure
+2. Azure Container Registry
+3. bounded AKS implementation
+4. Kubernetes Deployment, Service, probes, resources, autoscaling and ingress
+5. Azure Workload Identity and Key Vault integration
+6. VNet-side private-connectivity validation
+7. Container Insights / Azure Monitor integration
+8. hub-and-spoke networking where it adds architectural value
+9. Architecture Decision Records
+10. resilience and disaster-recovery design
+11. FinOps documentation
+12. final architecture diagram and repository cleanup
 
-After these items, platform expansion stops and the repository becomes a stable portfolio asset rather than an indefinitely growing lab.
+The intended platform progression is:
+
+    ASP.NET Core
+         |
+         v
+       Docker
+         |
+         v
+      Terraform
+         |
+         v
+         ACR
+         |
+         v
+         AKS
+         |
+         v
+    Kubernetes Workload
+         |
+         v
+    Azure Workload Identity
+         |
+         v
+    Key Vault / Private Link
+         |
+         v
+    Azure Monitor / Container Insights
+
+After these bounded items, platform expansion stops and the repository becomes a stable portfolio asset rather than an indefinitely growing lab.
 
 ---
 
@@ -952,3 +1405,6 @@ Selected implementation evidence is stored in [`docs/evidence`](evidence/).
 | [27 - Key Vault Private DNS zone](evidence/27-key-vault-private-dns-zone.png) | `privatelink.vaultcore.azure.net` and VNet integration |
 | [28 - Key Vault private A record](evidence/28-private-dns-key-vault-a-record.png) | Key Vault private hostname mapped to `10.10.2.4` |
 | [29 - Public DNS baseline](evidence/29-public-dns-baseline-keyvault.png) | Non-VNet Cloud Shell following the public DNS path, providing a baseline for future private-path runtime validation |
+| [30 - Containerised Products API](evidence/30-containerized-products-api-running.png) | Products API successfully running from the Docker container on `localhost:8080` |
+| [31 - Docker container runtime](evidence/31-docker-container-runtime.png) | Running Docker container and host-to-container `8080` port publishing |
+| [32 - Pipeline Docker build](evidence/32-pipeline-docker-build.png) | Docker image built successfully on an Azure DevOps Microsoft-hosted Linux agent |
