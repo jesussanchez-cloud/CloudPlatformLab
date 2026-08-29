@@ -99,13 +99,14 @@ stages:
       displayName: 'Determine Changed Infrastructure Areas'
 
 # ============================================================
-# Build application
+# Build application and container image
 # ============================================================
 
 - stage: Build
   displayName: 'Build Application'
   dependsOn: DetectChanges
   jobs:
+
   - job: BuildApplication
     displayName: 'Build .NET Application'
     steps:
@@ -128,6 +129,26 @@ stages:
         command: 'build'
         projects: '**/*.sln'
         arguments: '--configuration Release --no-restore'
+
+  - job: BuildContainer
+    displayName: 'Build Docker Image'
+    steps:
+
+    - checkout: self
+
+    - bash: |
+        set -e
+
+        echo "Building CloudPlatformLab container image..."
+
+        docker build \
+          -f src/CloudPlatformLab.Web/Dockerfile \
+          -t cloudplatformlab-api:$(Build.BuildId) \
+          .
+
+        echo "Docker image built successfully."
+      displayName: 'Build Docker Image'
+
 
 # ============================================================
 # Infrastructure domains
