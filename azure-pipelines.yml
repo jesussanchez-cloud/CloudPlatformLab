@@ -46,63 +46,67 @@ stages:
         SECURITY=false
         GOVERNANCE=false
         TERRAFORM_AKS=false
+        CONTAINER=false
+        PIPELINE_CHANGED=false
 
         # A change to the root pipeline can affect orchestration of every
         # platform area, so validate all infrastructure paths.
         if echo "$CHANGED_FILES" | grep -q '^azure-pipelines.yml$'; then
           echo "Root pipeline changed - enabling all infrastructure paths."
+          PIPELINE_CHANGED=true
 
-          APPSERVICE=true
-          NETWORKING=true
-          OBSERVABILITY=true
-          SECURITY=true
-          GOVERNANCE=true
-          TERRAFORM_AKS=true
-        else
           if echo "$CHANGED_FILES" | grep -Eq \
-            '^(infra/appservice/|pipelines/templates/appservice.yml$)'; then
+            '^(infra/appservice/|pipelines/templates/appservice\.yml$)'; then
             APPSERVICE=true
           fi
 
           if echo "$CHANGED_FILES" | grep -Eq \
-            '^(infra/networking/|pipelines/templates/networking.yml$)'; then
+            '^(infra/networking/|pipelines/templates/networking\.yml$)'; then
             NETWORKING=true
           fi
 
           if echo "$CHANGED_FILES" | grep -Eq \
-            '^(infra/observability/|pipelines/templates/observability.yml$)'; then
+            '^(infra/observability/|pipelines/templates/observability\.yml$)'; then
             OBSERVABILITY=true
           fi
 
           if echo "$CHANGED_FILES" | grep -Eq \
-            '^(infra/security/|pipelines/templates/security.yml$)'; then
+            '^(infra/security/|pipelines/templates/security\.yml$)'; then
             SECURITY=true
           fi
 
           if echo "$CHANGED_FILES" | grep -Eq \
-            '^(infra/governance/|pipelines/templates/governance.yml$)'; then
+            '^(infra/governance/|pipelines/templates/governance\.yml$)'; then
             GOVERNANCE=true
           fi
 
           if echo "$CHANGED_FILES" | grep -Eq \
-            '^(infra/terraform/aks/|pipelines/templates/terraform-aks.yml$)'; then
+            '^(infra/terraform/aks/|pipelines/templates/terraform-aks\.yml$)'; then
             TERRAFORM_AKS=true
           fi
-        fi
 
+          if echo "$CHANGED_FILES" | grep -Eq \
+            '^(src/CloudPlatformLab.sln$/|\.dockerignore$)'; then
+            CONTAINER=true
+          fi
+
+        echo "Pipeline changed: $PIPELINE_CHANGED"
         echo "App Service changed: $APPSERVICE"
         echo "Networking changed: $NETWORKING"
         echo "Observability changed: $OBSERVABILITY"
         echo "Security changed: $SECURITY"
         echo "Governance changed: $GOVERNANCE"
         echo "Terraform AKS changed: $TERRAFORM_AKS"
+        echo "Container changed: $CONTAINER"
 
+        echo "##vso[task.setvariable variable=pipelineChanged;isOutput=true]$PIPELINE_CHANGED"
         echo "##vso[task.setvariable variable=appServiceChanged;isOutput=true]$APPSERVICE"
         echo "##vso[task.setvariable variable=networkingChanged;isOutput=true]$NETWORKING"
         echo "##vso[task.setvariable variable=observabilityChanged;isOutput=true]$OBSERVABILITY"
         echo "##vso[task.setvariable variable=securityChanged;isOutput=true]$SECURITY"
         echo "##vso[task.setvariable variable=governanceChanged;isOutput=true]$GOVERNANCE"
         echo "##vso[task.setvariable variable=terraformAksChanged;isOutput=true]$TERRAFORM_AKS"
+        echo "##vso[task.setvariable variable=containerChanged;isOutput=true]$CONTAINER"
 
       name: detect
       displayName: 'Determine Changed Infrastructure Areas'
@@ -155,8 +159,18 @@ stages:
           -t cloudplatformlab-api:$(Build.BuildId) \
           .
 
-        echo "Docker image built successfully."
-      displayName: 'Build Docker Image'
+        echo "Saving Docker image as pipeline artifact..."
+
+        docker save \
+          cloudplatformlab-api:$(Build.BuildId) \
+          -o "$(Build.ArtifactStagingDirectory)/cloudplatformlab-api.tar"
+
+        echo "Docker image built and saved successfully."
+      displayName: 'Build and Save Docker Image'
+
+    - publish: '$(Build.ArtifactStagingDirectory)/cloudplatformlab-api.tar'
+      artifact: products-api-container
+      displayName: 'Publish Docker Image Artifact'
 
 # ============================================================
 # Infrastructure domains
@@ -247,3 +261,76 @@ stages:
         dependencies.DetectChanges.outputs['DetectChanges.detect.terraformAksChanged'],
         'true'
       )
+
+# ============================================================
+# Publish container image to Azure Container Registry
+# ============================================================
+
+- stage: PushContainer
+  displayName: 'Publish Container to ACR'
+  dependsOn:
+  - Build
+  - DetectChanges
+
+  condition:  |
+    and(
+      succeeded(),
+      eq(
+        dependencies.DetectChanges.outputs['DetectChanges.detect.containerChanged'],
+        'true'
+      )
+    )
+
+  jobs:
+
+  - job: PushContainerImage
+    displayName: 'Push Products API Image to ACR'
+
+    steps:
+
+    - download: current
+      artifact: products-api-container
+      displayName: 'Download Docker Image Artifact'
+
+    - bash: |
+        set -e
+
+        echo "Loading previously built Docker image..."
+
+        docker load \
+          -i "$(Pipeline.Workspace)/products-api-container/cloudplatformlab-api.tar"
+
+        echo "Docker image loaded successfully."
+      displayName: 'Load Docker Image'
+
+    - task: AzureCLI@2
+      displayName: 'Push Docker Image to ACR'
+      inputs:
+        azureSubscription: '$(serviceConnection)'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          set -e
+
+          ACR_NAME="cloudplatformlabdevacr"
+          IMAGE_NAME="cloudplatformlab-api"
+          IMAGE_TAG="$(Build.BuildId)"
+          ACR_LOGIN_SERVER="${ACR_NAME}.azurecr.io"
+
+          echo "Authenticating to Azure Container Registry..."
+
+          az acr login --name "$ACR_NAME"
+
+          echo "Tagging previously built image..."
+
+          docker tag \
+            "${IMAGE_NAME}:${IMAGE_TAG}" \
+            "${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${IMAGE_TAG}"
+
+          echo "Pushing image to Azure Container Registry..."
+
+          docker push \
+            "${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${IMAGE_TAG}"
+
+          echo "Container image pushed successfully:"
+          echo "${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${IMAGE_TAG}"
