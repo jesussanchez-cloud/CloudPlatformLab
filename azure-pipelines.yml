@@ -45,6 +45,7 @@ stages:
         OBSERVABILITY=false
         SECURITY=false
         GOVERNANCE=false
+        TERRAFORM_AKS=false
 
         # A change to the root pipeline can affect orchestration of every
         # platform area, so validate all infrastructure paths.
@@ -56,6 +57,7 @@ stages:
           OBSERVABILITY=true
           SECURITY=true
           GOVERNANCE=true
+          TERRAFORM_AKS=true
         else
           if echo "$CHANGED_FILES" | grep -Eq \
             '^(infra/appservice/|pipelines/templates/appservice.yml$)'; then
@@ -81,6 +83,11 @@ stages:
             '^(infra/governance/|pipelines/templates/governance.yml$)'; then
             GOVERNANCE=true
           fi
+
+          if echo "$CHANGED_FILES" | grep -Eq \
+            '^(infra/terraform/aks/|pipelines/templates/terraform-aks.yml$)'; then
+            TERRAFORM_AKS=true
+          fi
         fi
 
         echo "App Service changed: $APPSERVICE"
@@ -88,12 +95,14 @@ stages:
         echo "Observability changed: $OBSERVABILITY"
         echo "Security changed: $SECURITY"
         echo "Governance changed: $GOVERNANCE"
+        echo "Terraform AKS changed: $TERRAFORM_AKS"
 
         echo "##vso[task.setvariable variable=appServiceChanged;isOutput=true]$APPSERVICE"
         echo "##vso[task.setvariable variable=networkingChanged;isOutput=true]$NETWORKING"
         echo "##vso[task.setvariable variable=observabilityChanged;isOutput=true]$OBSERVABILITY"
         echo "##vso[task.setvariable variable=securityChanged;isOutput=true]$SECURITY"
         echo "##vso[task.setvariable variable=governanceChanged;isOutput=true]$GOVERNANCE"
+        echo "##vso[task.setvariable variable=terraformAksChanged;isOutput=true]$TERRAFORM_AKS"
 
       name: detect
       displayName: 'Determine Changed Infrastructure Areas'
@@ -148,7 +157,6 @@ stages:
 
         echo "Docker image built successfully."
       displayName: 'Build Docker Image'
-
 
 # ============================================================
 # Infrastructure domains
@@ -224,5 +232,18 @@ stages:
     runCondition: |
       eq(
         dependencies.DetectChanges.outputs['DetectChanges.detect.governanceChanged'],
+        'true'
+      )
+
+- template: pipelines/templates/terraform-aks.yml
+  parameters:
+    dependsOn:
+    - Build
+    - DetectChanges
+    serviceConnection: '$(serviceConnection)'
+    devEnvironment: '$(devEnvironment)'
+    runCondition: |
+      eq(
+        dependencies.DetectChanges.outputs['DetectChanges.detect.terraformAksChanged'],
         'true'
       )

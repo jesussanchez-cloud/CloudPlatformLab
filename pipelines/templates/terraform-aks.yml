@@ -1,0 +1,173 @@
+parameters:
+- name: dependsOn
+  type: object
+  default: []
+
+- name: serviceConnection
+  type: string
+
+- name: devEnvironment
+  type: string
+
+- name: runCondition
+  type: string
+  default: 'true'
+
+- name: terraformVersion
+  type: string
+  default: '1.13.5'
+
+# ============================================================
+# Terraform validation and plan
+# ============================================================
+
+stages:
+
+- stage: TerraformAKSPlan
+  displayName: 'Terraform AKS - Validate and Plan'
+  dependsOn: ${{ parameters.dependsOn }}
+
+  condition: |
+    and(
+      succeeded(),
+      ${{ parameters.runCondition }}
+    )
+
+  jobs:
+
+  - job: TerraformPlan
+    displayName: 'Terraform Validate and Plan'
+
+    steps:
+
+    - checkout: self
+
+    - bash: |
+        set -e
+
+        echo "Installing Terraform ${{ parameters.terraformVersion }}..."
+
+        curl -fsSLo terraform.zip \
+          "https://releases.hashicorp.com/terraform/${{ parameters.terraformVersion }}/terraform_${{ parameters.terraformVersion }}_linux_amd64.zip"
+
+        unzip -o terraform.zip
+        sudo mv terraform /usr/local/bin/terraform
+        rm terraform.zip
+
+        terraform version
+      displayName: 'Install Terraform'
+
+    - bash: |
+        set -e
+
+        echo "Checking Terraform formatting..."
+
+        terraform fmt -check -recursive infra/terraform/aks
+      displayName: 'Terraform Format Check'
+
+    - task: AzureCLI@2
+      displayName: 'Terraform Init, Validate and Plan'
+      inputs:
+        azureSubscription: '${{ parameters.serviceConnection }}'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        addSpnToEnvironment: true
+        workingDirectory: '$(System.DefaultWorkingDirectory)/infra/terraform/aks'
+        inlineScript: |
+          set -e
+
+          echo "Configuring Terraform authentication using Azure DevOps Workload Identity Federation..."
+
+          export ARM_CLIENT_ID="$servicePrincipalId"
+          export ARM_TENANT_ID="$tenantId"
+          export ARM_SUBSCRIPTION_ID="$(az account show --query id -o tsv)"
+          export ARM_USE_OIDC=true
+          export ARM_OIDC_TOKEN="$idToken"
+
+          echo "Initialising Terraform remote backend..."
+          terraform init -input=false
+
+          echo "Validating Terraform configuration..."
+          terraform validate
+
+          echo "Creating Terraform plan..."
+          terraform plan \
+            -input=false \
+            -out="$(Build.ArtifactStagingDirectory)/terraform-aks.tfplan"
+
+          echo "Terraform plan completed successfully."
+
+    - publish: '$(Build.ArtifactStagingDirectory)/terraform-aks.tfplan'
+      artifact: terraform-aks-plan
+      displayName: 'Publish Terraform Plan'
+
+
+# ============================================================
+# Terraform deployment
+# ============================================================
+
+- stage: TerraformAKSApply
+  displayName: 'Terraform AKS - Apply'
+  dependsOn:
+  - TerraformAKSPlan
+
+  condition: succeeded()
+
+  jobs:
+
+  - deployment: TerraformApply
+    displayName: 'Terraform Apply'
+    environment: '${{ parameters.devEnvironment }}'
+
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+
+          - checkout: self
+
+          - download: current
+            artifact: terraform-aks-plan
+            displayName: 'Download Terraform Plan'
+
+          - bash: |
+              set -e
+
+              echo "Installing Terraform ${{ parameters.terraformVersion }}..."
+
+              curl -fsSLo terraform.zip \
+                "https://releases.hashicorp.com/terraform/${{ parameters.terraformVersion }}/terraform_${{ parameters.terraformVersion }}_linux_amd64.zip"
+
+              unzip -o terraform.zip
+              sudo mv terraform /usr/local/bin/terraform
+              rm terraform.zip
+
+              terraform version
+            displayName: 'Install Terraform'
+
+          - task: AzureCLI@2
+            displayName: 'Terraform Apply'
+            inputs:
+              azureSubscription: '${{ parameters.serviceConnection }}'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              addSpnToEnvironment: true
+              workingDirectory: '$(System.DefaultWorkingDirectory)/infra/terraform/aks'
+              inlineScript: |
+                set -e
+
+                echo "Configuring Terraform authentication using Azure DevOps Workload Identity Federation..."
+
+                export ARM_CLIENT_ID="$servicePrincipalId"
+                export ARM_TENANT_ID="$tenantId"
+                export ARM_SUBSCRIPTION_ID="$(az account show --query id -o tsv)"
+                export ARM_USE_OIDC=true
+                export ARM_OIDC_TOKEN="$idToken"
+
+                echo "Initialising Terraform remote backend..."
+                terraform init -input=false
+
+                echo "Applying reviewed Terraform plan..."
+                terraform apply \
+                  -input=false \
+                  "$(Pipeline.Workspace)/terraform-aks-plan/terraform-aks.tfplan"
