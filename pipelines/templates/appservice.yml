@@ -1,0 +1,212 @@
+parameters:
+- name: dependsOn
+  type: object
+
+- name: resourceGroupName
+  type: string
+
+- name: serviceConnection
+  type: string
+
+- name: devEnvironment
+  type: string
+
+- name: location
+  type: string
+
+- name: appServiceSku
+  type: string
+
+- name: runCondition
+  type: string
+  default: 'true'
+
+
+stages:
+
+# =========================================================
+# APP SERVICE - VALIDATE
+# =========================================================
+
+- stage: ValidateAppService
+  displayName: 'Validate App Service'
+  dependsOn: ${{ parameters.dependsOn }}
+  condition: and(succeeded(), ${{ parameters.runCondition }})
+
+  jobs:
+
+  - job: ValidateAppService
+    displayName: 'Validate App Service Bicep'
+
+    steps:
+
+    - task: AzureCLI@2
+      displayName: 'Validate App Service Bicep'
+      inputs:
+        azureSubscription: ${{ parameters.serviceConnection }}
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          set -euo pipefail
+
+          az bicep build \
+            --file infra/appservice/main.bicep \
+            --stdout > /dev/null
+
+          echo "App Service Bicep validation passed."
+
+
+# =========================================================
+# APP SERVICE - READINESS
+# =========================================================
+
+- stage: AppServiceReadiness
+  displayName: 'App Service Readiness'
+  dependsOn: ValidateAppService
+  condition: succeeded()
+
+  jobs:
+
+  - job: AppServiceReadiness
+    displayName: 'Check App Service Deployment Readiness'
+
+    steps:
+
+    - task: AzureCLI@2
+      displayName: 'App Service Readiness Checks'
+      inputs:
+        azureSubscription: ${{ parameters.serviceConnection }}
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          set -euo pipefail
+
+          sku="${{ parameters.appServiceSku }}"
+
+          echo "Checking Microsoft.Web registration..."
+
+          providerState=$(az provider show \
+            --namespace Microsoft.Web \
+            --query registrationState \
+            --output tsv)
+
+          echo "Microsoft.Web registration state: $providerState"
+
+          if [ "$providerState" != "Registered" ]; then
+            echo "##vso[task.logissue type=error]Microsoft.Web is not registered."
+            exit 1
+          fi
+
+          echo "Checking resource group..."
+
+          resourceGroupExists=$(az group exists \
+            --name ${{ parameters.resourceGroupName }})
+
+          echo "Resource group exists: $resourceGroupExists"
+
+          if [ "$resourceGroupExists" != "true" ]; then
+            echo "##vso[task.logissue type=error]Resource group ${{ parameters.resourceGroupName }} does not exist."
+            exit 1
+          fi
+
+          echo "Checking App Service quota for SKU $sku in ${{ parameters.location }}..."
+
+          subscriptionId=$(az account show \
+            --query id \
+            --output tsv)
+
+          quotaJson=$(az rest \
+            --method get \
+            --url "https://management.azure.com/subscriptions/${subscriptionId}/providers/Microsoft.Web/locations/${{ parameters.location }}/usages?api-version=2025-03-01")
+
+          skuLimit=$(echo "$quotaJson" | jq -r \
+            --arg sku "$sku" \
+            '.value[] | select(.name.value == $sku) | .limit')
+
+          skuUsage=$(echo "$quotaJson" | jq -r \
+            --arg sku "$sku" \
+            '.value[] | select(.name.value == $sku) | .currentValue')
+
+          echo "$sku quota limit: $skuLimit"
+          echo "$sku current usage: $skuUsage"
+
+          if [ -z "$skuLimit" ] || [ "$skuLimit" = "null" ]; then
+            echo "##vso[task.logissue type=error]Unable to determine quota for App Service SKU $sku."
+            exit 1
+          fi
+
+          if [ "$skuLimit" -lt 1 ]; then
+            echo "##vso[task.logissue type=error]App Service SKU $sku has insufficient quota in ${{ parameters.location }}. Deployment cannot continue."
+            exit 1
+          fi
+
+          echo "App Service readiness checks passed."
+
+
+# =========================================================
+# APP SERVICE - WHAT-IF
+# =========================================================
+
+- stage: AppServiceWhatIf
+  displayName: 'App Service What-If'
+  dependsOn: AppServiceReadiness
+  condition: succeeded()
+
+  jobs:
+
+  - job: AppServiceWhatIf
+    displayName: 'Preview App Service Changes'
+
+    steps:
+
+    - task: AzureCLI@2
+      displayName: 'App Service What-If'
+      inputs:
+        azureSubscription: ${{ parameters.serviceConnection }}
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          set -euo pipefail
+
+          az deployment group what-if \
+            --resource-group ${{ parameters.resourceGroupName }} \
+            --template-file infra/appservice/main.bicep \
+            --parameters appServicePlanSku=${{ parameters.appServiceSku }}
+
+
+# =========================================================
+# APP SERVICE - DEPLOY
+# =========================================================
+
+- stage: DeployAppService
+  displayName: 'Deploy App Service'
+  dependsOn: AppServiceWhatIf
+  condition: succeeded()
+
+  jobs:
+
+  - deployment: DeployAppService
+    displayName: 'Deploy App Service to Dev'
+    environment: ${{ parameters.devEnvironment }}
+
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+
+          - checkout: self
+
+          - task: AzureCLI@2
+            displayName: 'Deploy App Service Bicep'
+            inputs:
+              azureSubscription: ${{ parameters.serviceConnection }}
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                set -euo pipefail
+
+                az deployment group create \
+                  --resource-group ${{ parameters.resourceGroupName }} \
+                  --template-file infra/appservice/main.bicep \
+                  --parameters appServicePlanSku=${{ parameters.appServiceSku }} \
+                  --name cloudplatformlab-appservice-dev

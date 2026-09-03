@@ -1,0 +1,298 @@
+parameters:
+- name: dependsOn
+  type: object
+
+- name: resourceGroupName
+  type: string
+
+- name: serviceConnection
+  type: string
+
+- name: devEnvironment
+  type: string
+
+- name: location
+  type: string
+
+- name: runCondition
+  type: string
+  default: 'true'
+
+
+stages:
+
+# =========================================================
+# GOVERNANCE - VALIDATE
+# =========================================================
+
+- stage: ValidateGovernance
+  displayName: 'Validate Governance'
+  dependsOn: ${{ parameters.dependsOn }}
+  condition: and(succeeded(), ${{ parameters.runCondition }})
+
+  jobs:
+
+  - job: ValidateGovernance
+    displayName: 'Validate Governance Bicep'
+
+    steps:
+
+    - task: AzureCLI@2
+      displayName: 'Validate Management Group Hierarchy Bicep'
+      inputs:
+        azureSubscription: ${{ parameters.serviceConnection }}
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          set -euo pipefail
+
+          az bicep build \
+            --file infra/governance/management-group-hierarchy.bicep \
+            --stdout > /dev/null
+
+          echo "Management Group hierarchy Bicep validation passed."
+
+    - task: AzureCLI@2
+      displayName: 'Validate Management Group Governance Bicep'
+      inputs:
+        azureSubscription: ${{ parameters.serviceConnection }}
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          set -euo pipefail
+
+          az bicep build \
+            --file infra/governance/landing-zone-policy.bicep \
+            --stdout > /dev/null
+
+          echo "Management Group governance Bicep validation passed."
+
+
+# =========================================================
+# GOVERNANCE - READINESS
+# =========================================================
+
+- stage: GovernanceReadiness
+  displayName: 'Governance Readiness'
+  dependsOn: ValidateGovernance
+  condition: succeeded()
+
+  jobs:
+
+  - job: GovernanceReadiness
+    displayName: 'Check Governance Deployment Readiness'
+
+    steps:
+
+    - task: AzureCLI@2
+      displayName: 'Governance Readiness Checks'
+      inputs:
+        azureSubscription: ${{ parameters.serviceConnection }}
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          set -euo pipefail
+
+          echo "Checking Microsoft.Authorization registration..."
+
+          authorizationState=$(az provider show \
+            --namespace Microsoft.Authorization \
+            --query registrationState \
+            --output tsv)
+
+          echo "Microsoft.Authorization registration state: $authorizationState"
+
+          if [ "$authorizationState" != "Registered" ]; then
+            echo "##vso[task.logissue type=error]Microsoft.Authorization is not registered."
+            exit 1
+          fi
+
+          echo "Checking Microsoft.PolicyInsights registration..."
+
+          policyInsightsState=$(az provider show \
+            --namespace Microsoft.PolicyInsights \
+            --query registrationState \
+            --output tsv)
+
+          echo "Microsoft.PolicyInsights registration state: $policyInsightsState"
+
+          if [ "$policyInsightsState" != "Registered" ]; then
+            echo "##vso[task.logissue type=error]Microsoft.PolicyInsights is not registered."
+            exit 1
+          fi
+
+          echo "Checking Microsoft.Management registration..."
+
+          managementState=$(az provider show \
+            --namespace Microsoft.Management \
+            --query registrationState \
+            --output tsv)
+
+          echo "Microsoft.Management registration state: $managementState"
+
+          if [ "$managementState" != "Registered" ]; then
+            echo "##vso[task.logissue type=error]Microsoft.Management is not registered."
+            exit 1
+          fi
+
+          echo "Checking target resource group..."
+
+          resourceGroupExists=$(az group exists \
+            --name ${{ parameters.resourceGroupName }})
+
+          echo "Resource group exists: $resourceGroupExists"
+
+          if [ "$resourceGroupExists" != "true" ]; then
+            echo "##vso[task.logissue type=error]Resource group ${{ parameters.resourceGroupName }} does not exist."
+            exit 1
+          fi
+
+          echo "Checking bootstrap Management Group access..."
+
+          if ! az account management-group show \
+            --name mg-cloudplatformlab \
+            --no-register \
+            --output none; then
+            echo "##vso[task.logissue type=error]The service connection cannot access mg-cloudplatformlab."
+            exit 1
+          fi
+
+          echo "Bootstrap Management Group access check passed."
+          echo "Governance readiness checks passed."
+
+
+# =========================================================
+# MANAGEMENT GROUP HIERARCHY - WHAT-IF
+# =========================================================
+
+- stage: GovernanceHierarchyWhatIf
+  displayName: 'Management Group Hierarchy What-If'
+  dependsOn: GovernanceReadiness
+  condition: succeeded()
+
+  jobs:
+
+  - job: GovernanceHierarchyWhatIf
+    displayName: 'Preview Management Group Hierarchy'
+
+    steps:
+
+    - task: AzureCLI@2
+      displayName: 'Management Group Hierarchy What-If'
+      inputs:
+        azureSubscription: ${{ parameters.serviceConnection }}
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          set -euo pipefail
+
+          az deployment mg what-if \
+            --management-group-id mg-cloudplatformlab \
+            --location ${{ parameters.location }} \
+            --template-file infra/governance/management-group-hierarchy.bicep \
+
+# =========================================================
+# MANAGEMENT GROUP HIERARCHY - DEPLOY
+# =========================================================
+
+- stage: DeployGovernanceHierarchy
+  displayName: 'Deploy Management Group Hierarchy'
+  dependsOn: GovernanceHierarchyWhatIf
+  condition: succeeded()
+
+  jobs:
+
+  - deployment: DeployGovernanceHierarchy
+    displayName: 'Deploy Management Group Hierarchy'
+    environment: ${{ parameters.devEnvironment }}
+
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+
+          - checkout: self
+
+          - task: AzureCLI@2
+            displayName: 'Deploy Management Group Hierarchy'
+            inputs:
+              azureSubscription: ${{ parameters.serviceConnection }}
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                set -euo pipefail
+                
+                az deployment mg create \
+                  --management-group-id mg-cloudplatformlab \
+                  --location ${{ parameters.location }} \
+                  --template-file infra/governance/management-group-hierarchy.bicep \
+                  --name cloudplatformlab-management-group-hierarchy             
+
+
+# =========================================================
+# MANAGEMENT GROUP POLICY - WHAT-IF
+# =========================================================
+
+- stage: GovernanceManagementGroupPolicyWhatIf
+  displayName: 'Management Group Policy What-If'
+  dependsOn: DeployGovernanceHierarchy
+  condition: succeeded()
+
+  jobs:
+
+  - job: GovernanceManagementGroupPolicyWhatIf
+    displayName: 'Preview Management Group Policy'
+
+    steps:
+
+    - task: AzureCLI@2
+      displayName: 'Management Group Policy What-If'
+      inputs:
+        azureSubscription: ${{ parameters.serviceConnection }}
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          set -euo pipefail
+
+          az deployment mg what-if \
+            --management-group-id mg-cloudplatformlab \
+            --location ${{ parameters.location }} \
+            --template-file infra/governance/landing-zone-policy.bicep
+
+
+# =========================================================
+# MANAGEMENT GROUP POLICY - DEPLOY
+# =========================================================
+
+- stage: DeployGovernanceManagementGroupPolicy
+  displayName: 'Deploy Management Group Policy'
+  dependsOn: GovernanceManagementGroupPolicyWhatIf
+  condition: succeeded()
+
+  jobs:
+
+  - deployment: DeployGovernanceManagementGroupPolicy
+    displayName: 'Deploy Landing Zone Policy'
+    environment: ${{ parameters.devEnvironment }}
+
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+
+          - checkout: self
+
+          - task: AzureCLI@2
+            displayName: 'Deploy Management Group Policy'
+            inputs:
+              azureSubscription: ${{ parameters.serviceConnection }}
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                set -euo pipefail
+
+                az deployment mg create \
+                  --management-group-id mg-cloudplatformlab \
+                  --location ${{ parameters.location }} \
+                  --template-file infra/governance/landing-zone-policy.bicep \
+                  --name cloudplatformlab-landing-zone-policy

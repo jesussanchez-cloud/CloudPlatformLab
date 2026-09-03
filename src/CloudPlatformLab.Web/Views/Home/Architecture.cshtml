@@ -8,35 +8,36 @@
         <h1>CloudPlatformLab Architecture</h1>
 
         <p class="lead">
-            A production-oriented Azure platform demonstrating cloud-native
-            application development, data engineering, security,
-            infrastructure as code and DevOps.
+            A production-oriented Azure cloud platform demonstrating
+            application architecture, platform engineering, security,
+            infrastructure as code, CI/CD, observability and FinOps.
         </p>
     </div>
 
     <div class="row g-4">
 
+        <!-- Identity & Security -->
         <div class="col-md-6 col-lg-4">
             <div class="card h-100 shadow-sm">
                 <div class="card-body">
-                    <h3>Identity & Security</h3>
+                    <h3>Identity &amp; Security</h3>
                     <ul>
                         <li>Microsoft Entra ID</li>
                         <li>Managed Identities</li>
                         <li>Azure Key Vault</li>
                         <li>Azure RBAC</li>
                         <li>Azure Policy</li>
-                        <li>Defender for Cloud</li>
                         <li>Private Endpoints</li>
                     </ul>
                 </div>
             </div>
         </div>
 
+        <!-- Application & APIs -->
         <div class="col-md-6 col-lg-4">
             <div class="card h-100 shadow-sm">
                 <div class="card-body">
-                    <h3>Application & APIs</h3>
+                    <h3>Application &amp; APIs</h3>
                     <ul>
                         <li>ASP.NET Core .NET 8</li>
                         <li>Azure App Service</li>
@@ -50,39 +51,21 @@
             </div>
         </div>
 
+        <!-- Data & Messaging -->
         <div class="col-md-6 col-lg-4">
             <div class="card h-100 shadow-sm">
                 <div class="card-body">
-                    <h3>Data Platform</h3>
+                    <h3>Data &amp; Messaging</h3>
                     <ul>
                         <li>Azure SQL</li>
-                        <li>Cosmos DB</li>
                         <li>Blob Storage</li>
-                        <li>Data Lake Storage Gen2</li>
                         <li>Service Bus</li>
-                        <li>Event Hubs</li>
                     </ul>
                 </div>
             </div>
         </div>
 
-        <div class="col-md-6 col-lg-4">
-            <div class="card h-100 shadow-sm">
-                <div class="card-body">
-                    <h3>Data Engineering</h3>
-                    <ul>
-                        <li>Microsoft Fabric</li>
-                        <li>Fabric Data Factory</li>
-                        <li>Fabric Lakehouse</li>
-                        <li>Fabric Warehouse</li>
-                        <li>Power BI</li>
-                        <li>Azure Synapse</li>
-                        <li>Azure Databricks</li>
-                    </ul>
-                </div>
-            </div>
-        </div>
-
+        <!-- Observability -->
         <div class="col-md-6 col-lg-4">
             <div class="card h-100 shadow-sm">
                 <div class="card-body">
@@ -93,16 +76,16 @@
                         <li>Log Analytics</li>
                         <li>Alerts</li>
                         <li>Health Checks</li>
-                        <li>Distributed Tracing</li>
                     </ul>
                 </div>
             </div>
         </div>
 
+        <!-- DevOps & IaC -->
         <div class="col-md-6 col-lg-4">
             <div class="card h-100 shadow-sm">
                 <div class="card-body">
-                    <h3>DevOps & IaC</h3>
+                    <h3>DevOps &amp; IaC</h3>
                     <ul>
                         <li>GitHub</li>
                         <li>GitHub Actions</li>
@@ -116,23 +99,89 @@
             </div>
         </div>
 
+        <!-- FinOps -->
         <div class="col-md-6 col-lg-4">
             <div class="card h-100 shadow-sm">
                 <div class="card-body">
-                    <h3>FinOps & Governance</h3>
+                    <h3>FinOps</h3>
                     <ul>
                         <li>Azure Cost Management</li>
-                        <li>Budgets & Cost Alerts</li>
+                        <li>Budgets &amp; Cost Alerts</li>
                         <li>Resource Tagging</li>
-                        <li>Cost Allocation</li>
                         <li>Right-Sizing</li>
                         <li>Non-Production Cost Controls</li>
-                        <li>Azure Policy</li>
-                        <li>Cloud Cost Optimization</li>
                     </ul>
                 </div>
             </div>
         </div>
 
     </div>
+
+    <!-- Engineering Principles -->
+    <div class="mt-5">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <h3>Engineering Principles</h3>
+
+                <div class="row g-3 mt-1">
+
+                    <div class="col-md-6 col-lg-4">
+                        <div class="p-3 bg-light rounded">
+                            <strong>Infrastructure as Code</strong>
+                        </div>
+                    </div>
+
+                    <div class="col-md-6 col-lg-4">
+                        <div class="p-3 bg-light rounded">
+                            <strong>Least-Privilege Security</strong>
+                        </div>
+                    </div>
+
+                    <div class="col-md-6 col-lg-4">
+                        <div class="p-3 bg-light rounded">
+                            <strong>Managed Identity over Secrets</strong>
+                        </div>
+                    </div>
+
+                    <div class="col-md-6 col-lg-4">
+                        <div class="p-3 bg-light rounded">
+                            <strong>Automated Testing &amp; Validation</strong>
+                        </div>
+                    </div>
+
+                    <div class="col-md-6 col-lg-4">
+                        <div class="p-3 bg-light rounded">
+                            <strong>Observability by Design</strong>
+                        </div>
+                    </div>
+
+                    <div class="col-md-6 col-lg-4">
+                        <div class="p-3 bg-light rounded">
+                            <strong>Repeatable Deployments</strong>
+                        </div>
+                    </div>
+
+                    <div class="col-md-6 col-lg-4">
+                        <div class="p-3 bg-light rounded">
+                            <strong>Cost-Aware Architecture</strong>
+                        </div>
+                    </div>
+
+                    <div class="col-md-6 col-lg-4">
+                        <div class="p-3 bg-light rounded">
+                            <strong>Environment Isolation</strong>
+                        </div>
+                    </div>
+
+                    <div class="col-md-6 col-lg-4">
+                        <div class="p-3 bg-light rounded">
+                            <strong>Evidence-Driven Engineering</strong>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+    </div>
+
 </div>
