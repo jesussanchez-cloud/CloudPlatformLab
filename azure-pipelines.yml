@@ -56,40 +56,40 @@ stages:
           PIPELINE_CHANGED=true
         fi
 
-          if echo "$CHANGED_FILES" | grep -Eq \
-            '^(infra/appservice/|pipelines/templates/appservice\.yml$)'; then
-            APPSERVICE=true
-          fi
+        if echo "$CHANGED_FILES" | grep -Eq \
+          '^(infra/appservice/|pipelines/templates/appservice\.yml$)'; then
+          APPSERVICE=true
+        fi
 
-          if echo "$CHANGED_FILES" | grep -Eq \
-            '^(infra/networking/|pipelines/templates/networking\.yml$)'; then
-            NETWORKING=true
-          fi
+        if echo "$CHANGED_FILES" | grep -Eq \
+          '^(infra/networking/|pipelines/templates/networking\.yml$)'; then
+          NETWORKING=true
+        fi
 
-          if echo "$CHANGED_FILES" | grep -Eq \
-            '^(infra/observability/|pipelines/templates/observability\.yml$)'; then
-            OBSERVABILITY=true
-          fi
+        if echo "$CHANGED_FILES" | grep -Eq \
+          '^(infra/observability/|pipelines/templates/observability\.yml$)'; then
+          OBSERVABILITY=true
+        fi
 
-          if echo "$CHANGED_FILES" | grep -Eq \
-            '^(infra/security/|pipelines/templates/security\.yml$)'; then
-            SECURITY=true
-          fi
+        if echo "$CHANGED_FILES" | grep -Eq \
+          '^(infra/security/|pipelines/templates/security\.yml$)'; then
+          SECURITY=true
+        fi
 
-          if echo "$CHANGED_FILES" | grep -Eq \
-            '^(infra/governance/|pipelines/templates/governance\.yml$)'; then
-            GOVERNANCE=true
-          fi
+        if echo "$CHANGED_FILES" | grep -Eq \
+          '^(infra/governance/|pipelines/templates/governance\.yml$)'; then
+          GOVERNANCE=true
+        fi
 
-          if echo "$CHANGED_FILES" | grep -Eq \
-            '^(infra/terraform/aks/|pipelines/templates/terraform-aks\.yml$)'; then
-            TERRAFORM_AKS=true
-          fi
+        if echo "$CHANGED_FILES" | grep -Eq \
+          '^(infra/terraform/aks/|pipelines/templates/terraform-aks\.yml$)'; then
+          TERRAFORM_AKS=true
+        fi
 
-          if echo "$CHANGED_FILES" | grep -Eq \
-            '^(src/CloudPlatformLab.sln$/|\.dockerignore$)'; then
-            CONTAINER=true
-          fi
+        if echo "$CHANGED_FILES" | grep -Eq \
+          '^(src/CloudPlatformLab.sln$/|\.dockerignore$)'; then
+          CONTAINER=true
+        fi
 
         echo "Pipeline changed: $PIPELINE_CHANGED"
         echo "App Service changed: $APPSERVICE"
