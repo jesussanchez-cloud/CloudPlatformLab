@@ -54,6 +54,7 @@ stages:
         if echo "$CHANGED_FILES" | grep -q '^azure-pipelines.yml$'; then
           echo "Root pipeline changed - enabling all infrastructure paths."
           PIPELINE_CHANGED=true
+        fi
 
           if echo "$CHANGED_FILES" | grep -Eq \
             '^(infra/appservice/|pipelines/templates/appservice\.yml$)'; then
