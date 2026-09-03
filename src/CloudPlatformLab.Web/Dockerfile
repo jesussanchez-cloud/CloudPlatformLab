@@ -1,4 +1,4 @@
-# Build and publish .Net app stage
+# Build and publish .Net8 app
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
 

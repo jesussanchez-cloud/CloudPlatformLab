@@ -51,7 +51,7 @@ stages:
 
         # A change to the root pipeline can affect orchestration of every
         # platform area, so validate all infrastructure paths.
-        if echo "$CHANGED_FILES" | grep -q '^azure-pipelines.yml$'; then
+        if echo "$CHANGED_FILES" | grep -q '^azure-pipelines\.yml$'; then
           echo "Root pipeline changed - enabling all infrastructure paths."
           PIPELINE_CHANGED=true
         fi
@@ -87,7 +87,7 @@ stages:
         fi
 
         if echo "$CHANGED_FILES" | grep -Eq \
-          '^(src/CloudPlatformLab.sln$/|\.dockerignore$)'; then
+          '^(src/|CloudPlatformLab\.sln$|\.dockerignore$)'; then
           CONTAINER=true
         fi
 
